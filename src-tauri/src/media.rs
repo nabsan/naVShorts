@@ -16,6 +16,7 @@ pub struct RenderExecutionReport {
     pub command_line: String,
     pub exit_status: String,
     pub stderr_text: String,
+    pub filter_script_path: Option<String>,
 }
 
 pub fn ffmpeg_binary() -> Result<PathBuf> {
@@ -225,6 +226,7 @@ pub fn build_filtergraph(
     zoom_mode: &ZoomMode,
     zoom_strength: f64,
     beat_zoom_expr: Option<&str>,
+    motion_blur_strength: f64,
     bounce_expr: &str,
     output_width: u32,
     output_height: u32,
@@ -236,22 +238,49 @@ pub fn build_filtergraph(
         ZoomMode::ZoomIn => format!("1+{:.5}*min(t/8,1)", zoom_strength * 0.22),
         ZoomMode::ZoomOut => format!("1+{:.5}*max(0,1-t/8)", zoom_strength * 0.22),
         ZoomMode::ZoomInOutBeat => beat_zoom_expr.unwrap_or("1.0").to_string(),
-        ZoomMode::ZoomInOutLoop => {
-            let amp = zoom_strength * 0.20;
-            let period = 2.20;
-            format!("1+{amp:.5}*(0.5+0.5*sin(2*PI*t/{period:.2}))")
+        ZoomMode::ZoomInOutLoop => match beat_zoom_expr {
+            Some(expr) => expr.to_string(),
+            None => {
+                let amp = zoom_strength * 0.20;
+                let period = 2.20;
+                format!("1+{amp:.5}*(0.5+0.5*sin(2*PI*t/{period:.2}))")
+            }
+        },
+        ZoomMode::ZoomSineSmooth => {
+            let amp = zoom_strength * 0.25;
+            // Smooth sine zoom like: 1 + 0.25*sin(t*2), but clamped to stay >= 1.
+            format!("1+{amp:.5}*(0.5+0.5*sin(t*2))")
         }
     };
 
     let bounce = if bounce_expr.trim().is_empty() { "0" } else { bounce_expr };
 
+    let post_fx = match zoom_mode {
+        ZoomMode::ZoomSineSmooth => {
+            let mb = motion_blur_strength.clamp(0.0, 1.0);
+            if mb <= 0.0 {
+                "".to_string()
+            } else {
+                let frames = if mb < 0.34 { 2 } else if mb < 0.67 { 3 } else { 4 };
+                let weights = match frames {
+                    2 => "1 1",
+                    3 => "1 2 1",
+                    _ => "1 2 2 1",
+                };
+                format!(",tmix=frames={}:weights='{}'", frames, weights)
+            }
+        }
+        _ => "".to_string(),
+    };
+
     let size = format!("{}:{}", output_width, output_height);
 
     format!(
-        "scale='if(gt(a,9/16),-2,1080)':'if(gt(a,9/16),1920,-2)',crop=1080:1920,scale='ceil(1080*({zoom}+{bounce})/2)*2':'ceil(1920*({zoom}+{bounce})/2)*2':eval=frame,crop=1080:1920,scale={size}:flags=lanczos",
+        "scale='if(gt(a,9/16),-2,1080)':'if(gt(a,9/16),1920,-2)',crop=1080:1920,scale='ceil(1080*({zoom}+{bounce})/2)*2':'ceil(1920*({zoom}+{bounce})/2)*2':eval=frame,crop=1080:1920,scale={size}:flags=lanczos{post}",
         zoom = zoom_expr,
         bounce = bounce,
-        size = size
+        size = size,
+        post = post_fx
     )
 }
 
@@ -273,6 +302,7 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
     }
 
     let filter_script_path = write_filter_script(filtergraph)?;
+    let persisted_filter_path = persist_filter_script_for_debug(output, filtergraph).ok();
 
     let mut args: Vec<String> = vec![
         "-y".to_string(),
@@ -417,6 +447,7 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
         command_line,
         exit_status: status.to_string(),
         stderr_text,
+        filter_script_path: persisted_filter_path.map(|p| p.display().to_string()),
     })
 }
 
@@ -441,13 +472,27 @@ fn write_filter_script(filtergraph: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn persist_filter_script_for_debug(output: &Path, filtergraph: &str) -> Result<PathBuf> {
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let debug_path = parent.join(format!("{stem}.filter_script.txt"));
+
+    fs::write(&debug_path, filtergraph)
+        .with_context(|| format!("failed to persist debug filter script: {}", debug_path.display()))?;
+
+    Ok(debug_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn filtergraph_includes_crop_and_scale() {
-        let g = build_filtergraph(&ZoomMode::ZoomIn, 0.4, None, "0", 1080, 1920);
+        let g = build_filtergraph(&ZoomMode::ZoomIn, 0.4, None, 0.0, "0", 1080, 1920);
         assert!(g.contains("crop=1080:1920"));
         assert!(g.contains("scale=1080:1920"));
     }
@@ -458,6 +503,7 @@ mod tests {
             &ZoomMode::ZoomInOutBeat,
             0.7,
             Some("max(1.0,1.05+(0.05*between(t,0.2,0.3)))"),
+            0.0,
             "0",
             1080,
             1920,
@@ -467,8 +513,16 @@ mod tests {
 
     #[test]
     fn filtergraph_supports_loop_zoom_expression() {
-        let g = build_filtergraph(&ZoomMode::ZoomInOutLoop, 0.6, None, "0", 1080, 1920);
+        let g = build_filtergraph(&ZoomMode::ZoomInOutLoop, 0.6, None, 0.0, "0", 1080, 1920);
         assert!(g.contains("sin(2*PI*t/2.20)"));
+    }
+
+    #[test]
+    fn filtergraph_supports_sine_smooth_post_fx() {
+        let g = build_filtergraph(&ZoomMode::ZoomSineSmooth, 0.6, None, 0.5, "0", 1080, 1920);
+        assert!(g.contains("sin(t*2)"));
+        assert!(g.contains("tmix=frames=3"));
+        assert!(!g.contains("eq=saturation"));
     }
 
     #[test]

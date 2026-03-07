@@ -32,10 +32,12 @@ const zoomMode = $("zoomMode");
 const zoomStrength = $("zoomStrength");
 const bounceStrength = $("bounceStrength");
 const beatSensitivity = $("beatSensitivity");
+const motionBlurStrength = $("motionBlurStrength");
 
 const zoomStrengthValue = $("zoomStrengthValue");
 const bounceStrengthValue = $("bounceStrengthValue");
 const beatSensitivityValue = $("beatSensitivityValue");
+const motionBlurStrengthValue = $("motionBlurStrengthValue");
 
 const preset = $("preset");
 const encoder = $("encoder");
@@ -80,6 +82,7 @@ function syncSliderLabels() {
   zoomStrengthValue.textContent = zoomStrength.value;
   bounceStrengthValue.textContent = bounceStrength.value;
   beatSensitivityValue.textContent = beatSensitivity.value;
+  motionBlurStrengthValue.textContent = motionBlurStrength.value;
 }
 
 function setProgress(progress, etaText) {
@@ -87,7 +90,7 @@ function setProgress(progress, etaText) {
   etaInfo.textContent = etaText;
 }
 
-[zoomStrength, bounceStrength, beatSensitivity].forEach((el) => {
+[zoomStrength, bounceStrength, beatSensitivity, motionBlurStrength].forEach((el) => {
   el.addEventListener("input", syncSliderLabels);
 });
 syncSliderLabels();
@@ -145,6 +148,7 @@ $("saveEffectsBtn").addEventListener("click", async () => {
         zoomStrength: Number(zoomStrength.value),
         bounceStrength: Number(bounceStrength.value),
         beatSensitivity: Number(beatSensitivity.value),
+        motionBlurStrength: Number(motionBlurStrength.value),
       },
     });
     printProject(project);

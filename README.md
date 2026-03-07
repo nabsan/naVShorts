@@ -1,4 +1,4 @@
-﻿# Shorts/Reels Maker (Windows)
+# Shorts/Reels Maker (Windows)
 
 A Windows desktop app for creating **9:16 vertical videos** for **YouTube Shorts** and **Instagram Reels**.
 Built with **Tauri + Rust + FFmpeg**.
@@ -14,7 +14,8 @@ Built with **Tauri + Rust + FFmpeg**.
 - Exports MP4 (H.264 + AAC).
 - Supports software and hardware encoding (CPU/NVIDIA/Intel/AMD).
 - Shows live render progress and ETA.
-- Writes export run logs as JSON (default) next to exported file.
+- Writes export run logs as JSON next to exported file.
+- Persists FFmpeg filter script next to exported file for debugging.
 
 ## Current Specs (v1)
 - Single-clip workflow (no multi-clip timeline yet).
@@ -34,10 +35,9 @@ Built with **Tauri + Rust + FFmpeg**.
   - Same folder as input file
   - `<original_name>_exported_yymmddhhmmss.<ext>`
   - Example: `hoge.mp4` -> `hoge_exported_260307154512.mp4`
-- Export log output:
-  - Default: `<output_basename>.json`
-  - Optional: `.log`
-  - Includes selected preset/effects/encoder, ffmpeg command, timing, status, stderr.
+- Export artifacts:
+  - Log JSON: `<output_basename>.json`
+  - Filter script: `<output_basename>.filter_script.txt`
 
 ## Zoom Modes
 - `None`: no zoom animation.
@@ -45,47 +45,51 @@ Built with **Tauri + Rust + FFmpeg**.
 - `Zoom Out`: gradually zooms out over time.
 - `Zoom In & Out (Beat Sync)`: alternates in/out on each detected beat.
   - Best used after `Analyze Beats`.
-- `Zoom In & Out (Loop)`: alternates in/out continuously by elapsed time.
-  - Works even without beat analysis.
+- `Zoom In & Out (Loop)`: smooth loop by elapsed time.
+  - Smooth asymmetric cycle (roughly in 4s + out 5s).
+  - If beat data exists, strength changes subtly by song energy.
+- `Zoom Sine Smooth (tmix optional)`: sine-based smooth zoom with optional frame blend.
+  - Saturation boost removed.
+  - Use `Motion blur strength` to control tmix (0.00 = off).
 
 ## Slider Behavior (Important)
 All sliders range from `0.00` to `1.00`.
 
 ### Zoom strength
-- Increase: stronger zoom motion, closer/faster visual push.
-- Decrease: softer zoom, more stable framing.
+- Increase: stronger zoom motion.
+- Decrease: softer zoom motion.
 
 ### Bounce strength
-- Increase: bigger pulse on beats, stronger music-reactive look.
-- Decrease: gentler bounce, calmer motion.
+- Increase: bigger pulse on beats.
+- Decrease: gentler bounce.
 
 ### Beat sensitivity
-- Increase: detects more beat points, triggers bounce more often.
-- Decrease: detects only stronger peaks, fewer cleaner triggers.
+- Increase: detects more beat points.
+- Decrease: detects only stronger peaks.
+
+### Motion blur strength
+- `0.00`: no tmix blur.
+- `0.01 - 0.33`: light blur.
+- `0.34 - 0.66`: medium blur.
+- `0.67 - 1.00`: stronger blur.
 
 ![Effects Sliders](docs/screenshots/04_effects_sliders.png)
 
 ## Step-by-Step (Beginner Friendly)
 1. Launch app.
 2. Click `Verify FFmpeg`.
-   - Confirm ffmpeg/ffprobe lines appear in `Status`.
-3. Click `Select & Open Video`.
-4. Choose your source clip from file picker.
-5. Confirm `Output path` is auto-filled.
-6. Set `Zoom mode` and sliders.
-7. Click `Apply Effects`.
-8. If you selected `Zoom In & Out (Beat Sync)`, click `Analyze Beats`.
-9. (Optional) Click `Render Preview`.
-10. Choose `Preset` and `Encoder`.
-11. Click `Export Final`.
-12. After completion, check the generated export log (`.json`) in the same folder.
-13. Watch progress bar and ETA until `completed`.
-
-![Open Video Dialog](docs/screenshots/02_open_video_dialog.png)
-![After Open](docs/screenshots/03_after_open_project_status.png)
-![Analyze Beats Done](docs/screenshots/05_analyze_beats_done.png)
-![Preview Progress](docs/screenshots/06_preview_render_progress.png)
-![Export Done](docs/screenshots/07_export_done.png)
+3. Click `Select & Open Video` and choose source.
+4. Confirm `Output path` auto-filled.
+5. Set `Zoom mode` and sliders.
+6. Click `Apply Effects`.
+7. If using `Zoom In & Out (Beat Sync)`, click `Analyze Beats`.
+8. (Optional) Click `Render Preview`.
+9. Choose `Preset` and `Encoder`.
+10. Click `Export Final`.
+11. Check generated files in output folder:
+   - exported video `.mp4`
+   - export log `.json`
+   - filter script `.filter_script.txt`
 
 ## UI and Buttons
 - `Select & Open Video`: Open file picker and load selected video.
@@ -96,15 +100,8 @@ All sliders range from `0.00` to `1.00`.
 - `Export Final`: Final export using selected preset/encoder.
 
 Right panel:
-- `Status` is shown first (top), with progress bar + ETA.
-- `Project` JSON is shown below.
-
-## Recent Changes (2026-03-07)
-- Added `Vertical 4K (2160x3840)` export preset.
-- Added encoder selector with GPU acceleration support (NVENC/QSV/AMF + auto fallback).
-- Added export execution logs written next to output file (`.json` default).
-- Added two zoom styles: beat-synced alternating zoom and time-loop alternating zoom.
-- Fixed file-picker open flow and improved relocated-project build stability.
+- `Status` on top (progress + ETA).
+- `Project` JSON below.
 
 ## Development
 ```powershell
@@ -113,5 +110,5 @@ npm.cmd run tauri dev
 ```
 
 ## Notes
-- Screenshot file naming guide: `docs/screenshots/README.md`
-- This is v1 focused on a simple, reliable single-clip flow.
+- Screenshot naming guide: `docs/screenshots/README.md`
+- v1 focuses on a reliable single-clip flow.

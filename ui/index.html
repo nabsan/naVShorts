@@ -27,6 +27,7 @@
         <option value="zoomOut">Zoom Out</option>
         <option value="zoomInOutBeat">Zoom In & Out (Beat Sync)</option>
         <option value="zoomInOutLoop">Zoom In & Out (Loop)</option>
+        <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
       </select>
 
       <label>Zoom strength <span id="zoomStrengthValue">0.18</span></label>
@@ -37,6 +38,9 @@
 
       <label>Beat sensitivity <span id="beatSensitivityValue">0.55</span></label>
       <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
+
+      <label>Motion blur strength <span id="motionBlurStrengthValue">0.00</span></label>
+      <input id="motionBlurStrength" type="range" min="0" max="1" step="0.01" value="0.00" />
 
       <div class="row">
         <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
@@ -82,7 +86,7 @@
     </section>
   </main>
 
-  <script type="module" src="./app.js?v=20260307-7"></script>
+  <script type="module" src="./app.js?v=20260307-8"></script>
 </body>
 </html>
 

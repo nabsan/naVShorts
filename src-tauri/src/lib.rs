@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use core::{
-    alternating_zoom_envelope, analyze_beats_from_video, decay_envelope, normalize_beat_map,
-    BeatPoint,
+    alternating_zoom_envelope, analyze_beats_from_video, decay_envelope,
+    dynamic_loop_zoom_envelope, normalize_beat_map, BeatPoint,
 };
 use media::{
     build_filtergraph, detect_hardware_encoders, ffmpeg_binary, ffprobe_binary, probe_video,
@@ -45,6 +45,7 @@ pub enum ZoomMode {
     ZoomOut,
     ZoomInOutBeat,
     ZoomInOutLoop,
+    ZoomSineSmooth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +55,8 @@ pub struct EffectsConfig {
     pub zoom_strength: f64,
     pub bounce_strength: f64,
     pub beat_sensitivity: f64,
+    #[serde(default)]
+    pub motion_blur_strength: f64,
 }
 
 impl Default for EffectsConfig {
@@ -63,6 +66,7 @@ impl Default for EffectsConfig {
             zoom_strength: 0.18,
             bounce_strength: 0.16,
             beat_sensitivity: 0.55,
+            motion_blur_strength: 0.0,
         }
     }
 }
@@ -77,6 +81,9 @@ impl EffectsConfig {
         }
         if !(0.0..=1.0).contains(&self.beat_sensitivity) {
             return Err("beat_sensitivity must be between 0.0 and 1.0".to_string());
+        }
+        if !(0.0..=1.0).contains(&self.motion_blur_strength) {
+            return Err("motion_blur_strength must be between 0.0 and 1.0".to_string());
         }
         Ok(())
     }
@@ -273,11 +280,15 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
         Some(map) => decay_envelope(&map.points, project.effects.bounce_strength, 0.20),
         None => "0".to_string(),
     };
-
-    let beat_zoom_expr = match &project.beat_map {
-        Some(map) if matches!(project.effects.zoom_mode, ZoomMode::ZoomInOutBeat) => {
-            Some(alternating_zoom_envelope(&map.points, project.effects.zoom_strength, 0.24))
-        }
+    let beat_zoom_expr = match project.effects.zoom_mode {
+        ZoomMode::ZoomInOutBeat => project
+            .beat_map
+            .as_ref()
+            .map(|map| alternating_zoom_envelope(&map.points, project.effects.zoom_strength, 0.24)),
+        ZoomMode::ZoomInOutLoop => Some(dynamic_loop_zoom_envelope(
+            project.beat_map.as_ref().map(|m| m.points.as_slice()),
+            project.effects.zoom_strength,
+        )),
         _ => None,
     };
 
@@ -285,6 +296,7 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
         &project.effects.zoom_mode,
         project.effects.zoom_strength,
         beat_zoom_expr.as_deref(),
+        project.effects.motion_blur_strength,
         &bounce_expr,
         out_width,
         out_height,
@@ -525,6 +537,7 @@ fn write_export_log(output_path: &str, snap: LogSnapshot) -> Result<(), String> 
             "version": snap.ffmpeg_version,
             "exit_status": ffmpeg_exit,
             "command": command_line,
+            "filter_script": snap.render_report.as_ref().and_then(|r| r.filter_script_path.clone()),
             "stderr": stderr_text
         },
         "encoder": {
@@ -543,6 +556,7 @@ fn write_export_log(output_path: &str, snap: LogSnapshot) -> Result<(), String> 
             "zoom_strength": snap.effects.zoom_strength,
             "bounce_strength": snap.effects.bounce_strength,
             "beat_sensitivity": snap.effects.beat_sensitivity,
+            "motion_blur_strength": snap.effects.motion_blur_strength,
             "beat_points": snap.beat_points,
             "filter_len": snap.filter_len
         }
@@ -587,6 +601,7 @@ mod tests {
             zoom_strength: 1.2,
             bounce_strength: 0.2,
             beat_sensitivity: 0.5,
+            motion_blur_strength: 0.0,
         };
         assert!(invalid.validate().is_err());
     }
@@ -598,6 +613,7 @@ mod tests {
             zoom_strength: 0.4,
             bounce_strength: 0.2,
             beat_sensitivity: 0.5,
+            motion_blur_strength: 0.0,
         };
         let s = serde_json::to_string(&payload).expect("serialize");
         assert!(s.contains("zoomInOutBeat"));
@@ -610,9 +626,23 @@ mod tests {
             zoom_strength: 0.5,
             bounce_strength: 0.2,
             beat_sensitivity: 0.5,
+            motion_blur_strength: 0.0,
         };
         let s = serde_json::to_string(&payload).expect("serialize");
         assert!(s.contains("zoomInOutLoop"));
+    }
+
+    #[test]
+    fn zoom_sine_smooth_mode_serializes() {
+        let payload = EffectsConfig {
+            zoom_mode: ZoomMode::ZoomSineSmooth,
+            zoom_strength: 0.5,
+            bounce_strength: 0.2,
+            beat_sensitivity: 0.5,
+            motion_blur_strength: 0.0,
+        };
+        let s = serde_json::to_string(&payload).expect("serialize");
+        assert!(s.contains("zoomSineSmooth"));
     }
 }
 

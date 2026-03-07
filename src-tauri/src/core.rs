@@ -180,6 +180,65 @@ pub fn alternating_zoom_envelope(points: &[BeatPoint], strength: f64, decay_sec:
     format!("max(1.0,{base:.5}+({}))", terms.join("+"))
 }
 
+pub fn dynamic_loop_zoom_envelope(points: Option<&[BeatPoint]>, strength: f64) -> String {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return "1.0".to_string();
+    }
+
+    // Base amplitude for loop zoom.
+    let amp = 0.18 * strength;
+
+    // Music-flow term in range ~[0,1].
+    // We keep this slow and smooth to avoid choppy motion.
+    let flow_expr = match points {
+        Some(p) if !p.is_empty() => {
+            let mut terms = Vec::new();
+            for bp in p.iter().step_by(3).take(90) {
+                let start = bp.time_sec;
+                let end = bp.time_sec + 6.5;
+                let level = (bp.intensity * 0.85).clamp(0.0, 1.0);
+                terms.push(format!(
+                    "({level:.5}*max(0,1-(t-{start:.5})/6.50000)*between(t,{start:.5},{end:.5}))"
+                ));
+            }
+            if terms.is_empty() {
+                "(0.50+0.30*(0.5+0.5*sin(2*PI*t/26.0))+0.20*(0.5+0.5*sin(2*PI*t/41.0)))"
+                    .to_string()
+            } else {
+                format!("min(1.0,({}))", terms.join("+"))
+            }
+        }
+        _ => "(0.50+0.30*(0.5+0.5*sin(2*PI*t/26.0))+0.20*(0.5+0.5*sin(2*PI*t/41.0)))"
+            .to_string(),
+    };
+
+    // Asymmetric smooth cycle:
+    // - zoom in: ~4 sec
+    // - zoom out: ~5 sec
+    // With small flow-based drift to avoid monotony while staying smooth.
+    let in_sec = format!("(3.8+1.0*(1-{flow}))", flow = flow_expr);
+    let out_sec = format!("(4.6+1.2*(1-{flow}))", flow = flow_expr);
+    let cycle_sec = format!("({in_s}+{out_s})", in_s = in_sec, out_s = out_sec);
+    let phase = format!("mod(t,{cycle})", cycle = cycle_sec);
+
+    let progress = format!(
+        "if(lt({ph},{in_s}),0.5*(1-cos(PI*{ph}/{in_s})),0.5*(1+cos(PI*({ph}-{in_s})/{out_s})))",
+        ph = phase,
+        in_s = in_sec,
+        out_s = out_sec
+    );
+
+    let amp_factor = format!("(0.85+0.25*{flow})", flow = flow_expr);
+
+    format!(
+        "max(1.0,1+{amp:.5}*{amp_fac}*{prog})",
+        amp = amp,
+        amp_fac = amp_factor,
+        prog = progress
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +273,17 @@ mod tests {
         let input = vec![BeatPoint { time_sec: 1.0, intensity: 1.0 }];
         let expr = alternating_zoom_envelope(&input, 0.8, 0.25);
         assert!(expr.contains("max(1.0"));
+    }
+
+    #[test]
+    fn dynamic_loop_zoom_expression_is_smooth_asymmetric_cycle() {
+        let input = vec![BeatPoint {
+            time_sec: 1.0,
+            intensity: 1.0,
+        }];
+        let expr = dynamic_loop_zoom_envelope(Some(&input), 0.7);
+        assert!(expr.contains("mod(t,"));
+        assert!(expr.contains("cos(PI*"));
+        assert!(expr.contains("max(1.0,1+"));
     }
 }
