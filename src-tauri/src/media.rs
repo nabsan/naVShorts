@@ -224,6 +224,7 @@ fn parse_rational(raw: &str) -> Option<f64> {
 pub fn build_filtergraph(
     zoom_mode: &ZoomMode,
     zoom_strength: f64,
+    beat_zoom_expr: Option<&str>,
     bounce_expr: &str,
     output_width: u32,
     output_height: u32,
@@ -234,6 +235,12 @@ pub fn build_filtergraph(
         ZoomMode::None => "1.0".to_string(),
         ZoomMode::ZoomIn => format!("1+{:.5}*min(t/8,1)", zoom_strength * 0.22),
         ZoomMode::ZoomOut => format!("1+{:.5}*max(0,1-t/8)", zoom_strength * 0.22),
+        ZoomMode::ZoomInOutBeat => beat_zoom_expr.unwrap_or("1.0").to_string(),
+        ZoomMode::ZoomInOutLoop => {
+            let amp = zoom_strength * 0.20;
+            let period = 2.20;
+            format!("1+{amp:.5}*(0.5+0.5*sin(2*PI*t/{period:.2}))")
+        }
     };
 
     let bounce = if bounce_expr.trim().is_empty() { "0" } else { bounce_expr };
@@ -440,9 +447,28 @@ mod tests {
 
     #[test]
     fn filtergraph_includes_crop_and_scale() {
-        let g = build_filtergraph(&ZoomMode::ZoomIn, 0.4, "0", 1080, 1920);
+        let g = build_filtergraph(&ZoomMode::ZoomIn, 0.4, None, "0", 1080, 1920);
         assert!(g.contains("crop=1080:1920"));
         assert!(g.contains("scale=1080:1920"));
+    }
+
+    #[test]
+    fn filtergraph_accepts_beat_zoom_expression() {
+        let g = build_filtergraph(
+            &ZoomMode::ZoomInOutBeat,
+            0.7,
+            Some("max(1.0,1.05+(0.05*between(t,0.2,0.3)))"),
+            "0",
+            1080,
+            1920,
+        );
+        assert!(g.contains("max(1.0,1.05"));
+    }
+
+    #[test]
+    fn filtergraph_supports_loop_zoom_expression() {
+        let g = build_filtergraph(&ZoomMode::ZoomInOutLoop, 0.6, None, "0", 1080, 1920);
+        assert!(g.contains("sin(2*PI*t/2.20)"));
     }
 
     #[test]

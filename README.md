@@ -39,6 +39,15 @@ Built with **Tauri + Rust + FFmpeg**.
   - Optional: `.log`
   - Includes selected preset/effects/encoder, ffmpeg command, timing, status, stderr.
 
+## Zoom Modes
+- `None`: no zoom animation.
+- `Zoom In`: gradually zooms in over time.
+- `Zoom Out`: gradually zooms out over time.
+- `Zoom In & Out (Beat Sync)`: alternates in/out on each detected beat.
+  - Best used after `Analyze Beats`.
+- `Zoom In & Out (Loop)`: alternates in/out continuously by elapsed time.
+  - Works even without beat analysis.
+
 ## Slider Behavior (Important)
 All sliders range from `0.00` to `1.00`.
 
@@ -65,7 +74,7 @@ All sliders range from `0.00` to `1.00`.
 5. Confirm `Output path` is auto-filled.
 6. Set `Zoom mode` and sliders.
 7. Click `Apply Effects`.
-8. Click `Analyze Beats`.
+8. If you selected `Zoom In & Out (Beat Sync)`, click `Analyze Beats`.
 9. (Optional) Click `Render Preview`.
 10. Choose `Preset` and `Encoder`.
 11. Click `Export Final`.
@@ -94,6 +103,7 @@ Right panel:
 - Added `Vertical 4K (2160x3840)` export preset.
 - Added encoder selector with GPU acceleration support (NVENC/QSV/AMF + auto fallback).
 - Added export execution logs written next to output file (`.json` default).
+- Added two zoom styles: beat-synced alternating zoom and time-loop alternating zoom.
 - Fixed file-picker open flow and improved relocated-project build stability.
 
 ## Development

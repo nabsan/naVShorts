@@ -1,4 +1,4 @@
-use std::f32;
+﻿use std::f32;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -156,6 +156,30 @@ pub fn decay_envelope(points: &[BeatPoint], strength: f64, decay_sec: f64) -> St
     terms.join("+")
 }
 
+pub fn alternating_zoom_envelope(points: &[BeatPoint], strength: f64, decay_sec: f64) -> String {
+    if points.is_empty() || strength <= 0.0 {
+        return "1.0".to_string();
+    }
+
+    let strength = strength.clamp(0.0, 1.0);
+    let amp = 0.18 * strength;
+    let base = 1.0 + amp * 0.5;
+    let mut terms = Vec::new();
+
+    for (idx, p) in points.iter().take(240).enumerate() {
+        let start = p.time_sec;
+        let end = p.time_sec + decay_sec;
+        let sign = if idx % 2 == 0 { 1.0 } else { -1.0 };
+        let beat_amp = (p.intensity * amp * 0.9).clamp(0.0, amp);
+
+        terms.push(format!(
+            "({sign:.1}*{beat_amp:.5}*max(0,1-(t-{start:.5})/{decay_sec:.5})*between(t,{start:.5},{end:.5}))"
+        ));
+    }
+
+    format!("max(1.0,{base:.5}+({}))", terms.join("+"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +207,12 @@ mod tests {
     fn extract_beats_handles_empty() {
         let beats = extract_beats(&[], 8000, 0.5);
         assert!(beats.is_empty());
+    }
+
+    #[test]
+    fn alternating_zoom_expression_is_clamped() {
+        let input = vec![BeatPoint { time_sec: 1.0, intensity: 1.0 }];
+        let expr = alternating_zoom_envelope(&input, 0.8, 0.25);
+        assert!(expr.contains("max(1.0"));
     }
 }

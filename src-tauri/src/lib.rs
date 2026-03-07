@@ -7,7 +7,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use core::{analyze_beats_from_video, decay_envelope, normalize_beat_map, BeatPoint};
+use core::{
+    alternating_zoom_envelope, analyze_beats_from_video, decay_envelope, normalize_beat_map,
+    BeatPoint,
+};
 use media::{
     build_filtergraph, detect_hardware_encoders, ffmpeg_binary, ffprobe_binary, probe_video,
     render_with_ffmpeg, tool_version_line,
@@ -40,6 +43,8 @@ pub enum ZoomMode {
     None,
     ZoomIn,
     ZoomOut,
+    ZoomInOutBeat,
+    ZoomInOutLoop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,9 +274,17 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
         None => "0".to_string(),
     };
 
+    let beat_zoom_expr = match &project.beat_map {
+        Some(map) if matches!(project.effects.zoom_mode, ZoomMode::ZoomInOutBeat) => {
+            Some(alternating_zoom_envelope(&map.points, project.effects.zoom_strength, 0.24))
+        }
+        _ => None,
+    };
+
     let filtergraph = build_filtergraph(
         &project.effects.zoom_mode,
         project.effects.zoom_strength,
+        beat_zoom_expr.as_deref(),
         &bounce_expr,
         out_width,
         out_height,
@@ -576,6 +589,30 @@ mod tests {
             beat_sensitivity: 0.5,
         };
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn zoom_in_out_beat_mode_serializes() {
+        let payload = EffectsConfig {
+            zoom_mode: ZoomMode::ZoomInOutBeat,
+            zoom_strength: 0.4,
+            bounce_strength: 0.2,
+            beat_sensitivity: 0.5,
+        };
+        let s = serde_json::to_string(&payload).expect("serialize");
+        assert!(s.contains("zoomInOutBeat"));
+    }
+
+    #[test]
+    fn zoom_in_out_loop_mode_serializes() {
+        let payload = EffectsConfig {
+            zoom_mode: ZoomMode::ZoomInOutLoop,
+            zoom_strength: 0.5,
+            bounce_strength: 0.2,
+            beat_sensitivity: 0.5,
+        };
+        let s = serde_json::to_string(&payload).expect("serialize");
+        assert!(s.contains("zoomInOutLoop"));
     }
 }
 

@@ -39,6 +39,15 @@ YouTube Shorts / Instagram Reels向けの**9:16縦動画**を作るWindowsデス
   - 任意: `.log`
   - プリセット/エフェクト/エンコーダー/ffmpegコマンド/所要時間/ステータス/stderr を保存
 
+## Zoom mode の違い
+- `None`: ズーム効果なし
+- `Zoom In`: 時間経過で徐々に寄る
+- `Zoom Out`: 時間経過で徐々に引く
+- `Zoom In & Out (Beat Sync)`: 検出ビートごとに寄り/引きを交互に切替
+  - `Analyze Beats` 後の利用を推奨
+- `Zoom In & Out (Loop)`: 時間ベースで寄り/引きを周期ループ
+  - ビート解析なしでも動作
+
 ## スライダーを増減するとどうなるか
 すべて `0.00 ~ 1.00`。
 
@@ -63,7 +72,7 @@ YouTube Shorts / Instagram Reels向けの**9:16縦動画**を作るWindowsデス
 4. 自動入力された `Output path` を確認
 5. `Zoom mode` とスライダーを調整
 6. `Apply Effects` を押す
-7. `Analyze Beats` を押す
+7. `Zoom In & Out (Beat Sync)` を選んだ場合は `Analyze Beats` を押す
 8. （任意）`Render Preview`
 9. `Preset` と `Encoder` を選ぶ
 10. `Export Final`
@@ -92,6 +101,7 @@ YouTube Shorts / Instagram Reels向けの**9:16縦動画**を作るWindowsデス
 - `Vertical 4K (2160x3840)` プリセット追加
 - GPU加速エンコード選択（NVENC/QSV/AMF + 自動フォールバック）追加
 - 出力ファイル横に実行ログを書き出し（既定 `.json`）
+- ズーム表現を追加（ビート同期の交互ズーム / 時間ループの交互ズーム）
 - `Select & Open Video` の不具合と移動後のビルド安定性を修正
 
 ## 開発起動
