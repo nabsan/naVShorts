@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shorts/Reels Maker</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="layout">
+    <section class="panel">
+      <h1>Shorts/Reels Maker</h1>
+      <p class="sub">Single-clip 9:16 movie builder for YouTube Shorts and Instagram Reels.</p>
+
+      <label>Video file path</label>
+      <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
+      <div class="row">
+        <button id="openBtn">Select & Open Video</button>
+        <button id="verifyBtn" class="secondary">Verify FFmpeg</button>
+      </div>
+
+      <h2>Effects</h2>
+      <label>Zoom mode</label>
+      <select id="zoomMode">
+        <option value="none">None</option>
+        <option value="zoomIn" selected>Zoom In</option>
+        <option value="zoomOut">Zoom Out</option>
+      </select>
+
+      <label>Zoom strength <span id="zoomStrengthValue">0.18</span></label>
+      <input id="zoomStrength" type="range" min="0" max="1" step="0.01" value="0.18" />
+
+      <label>Bounce strength <span id="bounceStrengthValue">0.16</span></label>
+      <input id="bounceStrength" type="range" min="0" max="1" step="0.01" value="0.16" />
+
+      <label>Beat sensitivity <span id="beatSensitivityValue">0.55</span></label>
+      <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
+
+      <div class="row">
+        <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
+        <button id="analyzeBtn" class="secondary">Analyze Beats</button>
+      </div>
+
+      <h2>Render</h2>
+      <label>Preset</label>
+      <select id="preset">
+        <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
+        <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
+      </select>
+
+      <label>Output path</label>
+      <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
+
+      <div class="row">
+        <button id="previewBtn" class="secondary">Render Preview</button>
+        <button id="exportBtn">Export Final</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Status</h2>
+      <div class="progressWrap">
+        <progress id="renderProgress" max="1" value="0"></progress>
+        <div id="etaInfo" class="eta">Idle</div>
+      </div>
+      <pre id="statusInfo">Idle.</pre>
+
+      <h2>Project</h2>
+      <pre id="projectInfo">No video loaded.</pre>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js?v=20260307-3"></script>
+</body>
+</html>
