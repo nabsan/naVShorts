@@ -38,6 +38,7 @@ const bounceStrengthValue = $("bounceStrengthValue");
 const beatSensitivityValue = $("beatSensitivityValue");
 
 const preset = $("preset");
+const encoder = $("encoder");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -219,9 +220,43 @@ if (!tauriInvoke) {
   printStatus("Tauri invoke bridge not found.");
 }
 
+initEncoderOptions().catch(() => {});
+
 refreshProject().catch((e) => {
   if (!tauriInvoke) {
     return;
   }
   printStatus(String(e));
 });
+
+async function initEncoderOptions() {
+  try {
+    const options = await invoke("get_encoder_options");
+    const available = new Set(options);
+
+    for (const opt of encoder.querySelectorAll("option")) {
+      const v = opt.value;
+      if (v === "auto" || v === "cpu") {
+        opt.disabled = false;
+        continue;
+      }
+      opt.disabled = !available.has(v);
+      if (opt.disabled) {
+        opt.textContent += " (unavailable)";
+      }
+    }
+
+    if (available.has("nvidia")) {
+      printStatus("Encoder: Auto will use NVIDIA NVENC");
+    } else if (available.has("intel")) {
+      printStatus("Encoder: Auto will use Intel QSV");
+    } else if (available.has("amd")) {
+      printStatus("Encoder: Auto will use AMD AMF");
+    } else {
+      printStatus("Encoder: Auto will use CPU (libx264)");
+    }
+  } catch (e) {
+    printStatus(`Encoder detection failed: ${String(e)}`);
+  }
+}
+

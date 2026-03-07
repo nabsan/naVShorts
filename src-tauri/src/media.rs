@@ -9,7 +9,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::{VideoInfo, ZoomMode};
+use crate::{VideoEncoder, VideoInfo, ZoomMode};
+
+#[derive(Debug, Clone)]
+pub struct RenderExecutionReport {
+    pub command_line: String,
+    pub exit_status: String,
+    pub stderr_text: String,
+}
 
 pub fn ffmpeg_binary() -> Result<PathBuf> {
     resolve_binary("ffmpeg")
@@ -17,6 +24,38 @@ pub fn ffmpeg_binary() -> Result<PathBuf> {
 
 pub fn ffprobe_binary() -> Result<PathBuf> {
     resolve_binary("ffprobe")
+}
+
+pub fn detect_hardware_encoders(ffmpeg_path: &Path) -> Result<Vec<String>> {
+    let out = Command::new(ffmpeg_path)
+        .arg("-hide_banner")
+        .arg("-encoders")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to query encoders from {}", ffmpeg_path.display()))?;
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "ffmpeg -encoders failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    let mut list = Vec::new();
+
+    if text.contains("h264_nvenc") {
+        list.push("nvidia".to_string());
+    }
+    if text.contains("h264_qsv") {
+        list.push("intel".to_string());
+    }
+    if text.contains("h264_amf") {
+        list.push("amd".to_string());
+    }
+
+    Ok(list)
 }
 
 pub fn tool_version_line(binary: &Path) -> Result<String> {
@@ -182,7 +221,13 @@ fn parse_rational(raw: &str) -> Option<f64> {
     raw.parse::<f64>().ok()
 }
 
-pub fn build_filtergraph(zoom_mode: &ZoomMode, zoom_strength: f64, bounce_expr: &str, preview: bool) -> String {
+pub fn build_filtergraph(
+    zoom_mode: &ZoomMode,
+    zoom_strength: f64,
+    bounce_expr: &str,
+    output_width: u32,
+    output_height: u32,
+) -> String {
     let zoom_strength = zoom_strength.clamp(0.0, 1.0);
 
     let zoom_expr = match zoom_mode {
@@ -193,7 +238,7 @@ pub fn build_filtergraph(zoom_mode: &ZoomMode, zoom_strength: f64, bounce_expr: 
 
     let bounce = if bounce_expr.trim().is_empty() { "0" } else { bounce_expr };
 
-    let size = if preview { "540:960" } else { "1080:1920" };
+    let size = format!("{}:{}", output_width, output_height);
 
     format!(
         "scale='if(gt(a,9/16),-2,1080)':'if(gt(a,9/16),1920,-2)',crop=1080:1920,scale='ceil(1080*({zoom}+{bounce})/2)*2':'ceil(1920*({zoom}+{bounce})/2)*2':eval=frame,crop=1080:1920,scale={size}:flags=lanczos",
@@ -210,53 +255,104 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
     filtergraph: &str,
     frame_rate: u32,
     duration_sec: f64,
+    encoder: VideoEncoder,
     mut progress: F,
-) -> Result<()> {
+) -> Result<RenderExecutionReport> {
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create output directory: {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create output directory: {}", parent.display()))?;
         }
     }
 
     let filter_script_path = write_filter_script(filtergraph)?;
 
+    let mut args: Vec<String> = vec![
+        "-y".to_string(),
+        "-v".to_string(),
+        "error".to_string(),
+        "-progress".to_string(),
+        "pipe:1".to_string(),
+        "-i".to_string(),
+        input.display().to_string(),
+        "-filter_script:v".to_string(),
+        filter_script_path.display().to_string(),
+        "-r".to_string(),
+        frame_rate.to_string(),
+    ];
+
+    match encoder {
+        VideoEncoder::Cpu | VideoEncoder::Auto => {
+            args.extend([
+                "-c:v".to_string(),
+                "libx264".to_string(),
+                "-preset".to_string(),
+                "medium".to_string(),
+                "-crf".to_string(),
+                "22".to_string(),
+            ]);
+        }
+        VideoEncoder::Nvidia => {
+            args.extend([
+                "-c:v".to_string(),
+                "h264_nvenc".to_string(),
+                "-preset".to_string(),
+                "p5".to_string(),
+                "-cq".to_string(),
+                "23".to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
+            ]);
+        }
+        VideoEncoder::Intel => {
+            args.extend([
+                "-c:v".to_string(),
+                "h264_qsv".to_string(),
+                "-global_quality".to_string(),
+                "23".to_string(),
+            ]);
+        }
+        VideoEncoder::Amd => {
+            args.extend([
+                "-c:v".to_string(),
+                "h264_amf".to_string(),
+                "-quality".to_string(),
+                "quality".to_string(),
+                "-rc".to_string(),
+                "cqp".to_string(),
+                "-qp_i".to_string(),
+                "23".to_string(),
+                "-qp_p".to_string(),
+                "23".to_string(),
+            ]);
+        }
+    }
+
+    args.extend([
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+        "-b:a".to_string(),
+        "192k".to_string(),
+        output.display().to_string(),
+    ]);
+
+    let command_line = format!(
+        "\"{}\" {}",
+        ffmpeg_path.display(),
+        args.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ")
+    );
+
     let mut cmd = Command::new(ffmpeg_path);
-    cmd.arg("-y")
-        .arg("-v")
-        .arg("error")
-        .arg("-progress")
-        .arg("pipe:1")
-        .arg("-i")
-        .arg(input)
-        .arg("-filter_script:v")
-        .arg(&filter_script_path)
-        .arg("-r")
-        .arg(frame_rate.to_string())
-        .arg("-c:v")
-        .arg("libx264")
-        .arg("-preset")
-        .arg("medium")
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-movflags")
-        .arg("+faststart")
-        .arg("-c:a")
-        .arg("aac")
-        .arg("-b:a")
-        .arg("192k")
-        .arg(output)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| {
         anyhow!(
-            "failed to start ffmpeg render (exe={}, input={}, output={}, filter_len={}): {}",
-            ffmpeg_path.display(),
-            input.display(),
-            output.display(),
-            filtergraph.len(),
+            "failed to start ffmpeg render (command={}): {}",
+            command_line,
             e
         )
     })?;
@@ -295,19 +391,36 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
     let status = child.wait()?;
     let mut stderr_buf = Vec::new();
     let _ = stderr.read_to_end(&mut stderr_buf);
+    let stderr_text = String::from_utf8_lossy(&stderr_buf).to_string();
 
     let _ = fs::remove_file(&filter_script_path);
 
     if !status.success() {
         return Err(anyhow!(
-            "ffmpeg render failed (status={}): {}",
+            "ffmpeg render failed (status={}, command={}): {}",
             status,
-            String::from_utf8_lossy(&stderr_buf)
+            command_line,
+            stderr_text
         ));
     }
 
     progress(1.0, "Finishing".to_string());
-    Ok(())
+
+    Ok(RenderExecutionReport {
+        command_line,
+        exit_status: status.to_string(),
+        stderr_text,
+    })
+}
+
+fn quote_arg(raw: &str) -> String {
+    if raw.is_empty() {
+        return "\"\"".to_string();
+    }
+    if raw.contains(' ') || raw.contains('"') {
+        return format!("\"{}\"", raw.replace('"', "\\\""));
+    }
+    raw.to_string()
 }
 
 fn write_filter_script(filtergraph: &str) -> Result<PathBuf> {
@@ -327,7 +440,7 @@ mod tests {
 
     #[test]
     fn filtergraph_includes_crop_and_scale() {
-        let g = build_filtergraph(&ZoomMode::ZoomIn, 0.4, "0", false);
+        let g = build_filtergraph(&ZoomMode::ZoomIn, 0.4, "0", 1080, 1920);
         assert!(g.contains("crop=1080:1920"));
         assert!(g.contains("scale=1080:1920"));
     }

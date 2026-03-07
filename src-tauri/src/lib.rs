@@ -2,13 +2,15 @@ mod core;
 mod media;
 
 use std::collections::HashMap;
+use std::fs;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use core::{analyze_beats_from_video, decay_envelope, normalize_beat_map, BeatPoint};
 use media::{
-    build_filtergraph, ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg,
-    tool_version_line,
+    build_filtergraph, detect_hardware_encoders, ffmpeg_binary, ffprobe_binary, probe_video,
+    render_with_ffmpeg, tool_version_line,
 };
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -100,6 +102,18 @@ impl Default for ProjectState {
 pub enum ExportPreset {
     Shorts1080x1920,
     Reels1080x1920,
+    #[serde(rename = "vertical4k2160x3840")]
+    Vertical4K2160x3840,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoEncoder {
+    Auto,
+    Cpu,
+    Nvidia,
+    Intel,
+    Amd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +122,7 @@ pub struct RenderRequest {
     pub output_path: String,
     pub preset: ExportPreset,
     pub preview: bool,
+    pub encoder: Option<VideoEncoder>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +211,15 @@ fn preset_frame_rate(preset: &ExportPreset) -> u32 {
     match preset {
         ExportPreset::Shorts1080x1920 => 30,
         ExportPreset::Reels1080x1920 => 30,
+        ExportPreset::Vertical4K2160x3840 => 30,
+    }
+}
+
+fn preset_dimensions(preset: &ExportPreset) -> (u32, u32) {
+    match preset {
+        ExportPreset::Shorts1080x1920 => (1080, 1920),
+        ExportPreset::Reels1080x1920 => (1080, 1920),
+        ExportPreset::Vertical4K2160x3840 => (2160, 3840),
     }
 }
 
@@ -223,7 +247,22 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
     }
 
     let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
+    let ffmpeg_ver = tool_version_line(&ffmpeg).unwrap_or_else(|_| "unknown".to_string());
+    let available_hw = detect_hardware_encoders(&ffmpeg).map_err(|e| format!("{e:#}"))?;
+    let requested_encoder = request.encoder.clone().unwrap_or(VideoEncoder::Auto);
+    let chosen_encoder = resolve_encoder(requested_encoder.clone(), &available_hw)?;
     let frame_rate = if request.preview { 24 } else { preset_frame_rate(&request.preset) };
+    let (out_width, out_height) = if request.preview {
+        (540, 960)
+    } else {
+        preset_dimensions(&request.preset)
+    };
+
+    let beat_points = project
+        .beat_map
+        .as_ref()
+        .map(|m| m.points.len())
+        .unwrap_or(0);
 
     let bounce_expr = match &project.beat_map {
         Some(map) => decay_envelope(&map.points, project.effects.bounce_strength, 0.20),
@@ -234,7 +273,8 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
         &project.effects.zoom_mode,
         project.effects.zoom_strength,
         &bounce_expr,
-        request.preview,
+        out_width,
+        out_height,
     );
 
     let job_id = Uuid::new_v4().to_string();
@@ -251,7 +291,13 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
         renders.insert(job_id.clone(), status.clone());
     }
 
+    let effects_for_log = project.effects.clone();
+    let preset_for_log = request.preset.clone();
+
     std::thread::spawn(move || {
+        let started_at = SystemTime::now();
+        let started_timer = Instant::now();
+
         {
             if let Ok(mut s) = status.lock() {
                 s.state = RenderState::Running;
@@ -266,7 +312,8 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
             &filtergraph,
             frame_rate,
             info.duration_sec,
-            |progress, message| {
+            chosen_encoder.clone(),
+            |progress: f64, message: String| {
                 if let Ok(mut s) = status.lock() {
                     s.progress = progress.clamp(0.0, 1.0);
                     s.message = message;
@@ -274,20 +321,55 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
             },
         );
 
+        let elapsed_sec = started_timer.elapsed().as_secs_f64();
+        let finished_at = SystemTime::now();
+
+        let mut final_message = String::new();
+        let mut final_ok = false;
+
         if let Ok(mut s) = status.lock() {
-            match render_result {
+            match &render_result {
                 Ok(_) => {
                     s.state = RenderState::Completed;
                     s.progress = 1.0;
                     s.message = "Render completed".to_string();
-                    s.output_path = Some(output_path);
+                    s.output_path = Some(output_path.clone());
+                    final_message = s.message.clone();
+                    final_ok = true;
                 }
                 Err(err) => {
                     s.state = RenderState::Failed;
                     s.message = format!("Render failed: {err:#}");
+                    final_message = s.message.clone();
                 }
             }
         }
+
+        let _ = write_export_log(
+            &output_path,
+            LogSnapshot {
+                success: final_ok,
+                status_message: final_message,
+                started_at,
+                finished_at,
+                elapsed_sec,
+                input_video: input_video.clone(),
+                output_video: output_path.clone(),
+                ffmpeg_path: ffmpeg.display().to_string(),
+                ffmpeg_version: ffmpeg_ver.clone(),
+                requested_encoder,
+                chosen_encoder,
+                available_hw,
+                preset: preset_for_log,
+                width: out_width,
+                height: out_height,
+                frame_rate,
+                effects: effects_for_log,
+                beat_points,
+                filter_len: filtergraph.len(),
+                render_report: render_result.ok(),
+            },
+        );
     });
 
     Ok(job_id)
@@ -317,6 +399,147 @@ fn verify_runtime_tools() -> Result<Vec<String>, String> {
     ])
 }
 
+
+#[tauri::command]
+fn get_encoder_options() -> Result<Vec<String>, String> {
+    let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
+    let available_hw = detect_hardware_encoders(&ffmpeg).map_err(|e| format!("{e:#}"))?;
+
+    let mut out = vec!["auto".to_string(), "cpu".to_string()];
+    out.extend(available_hw);
+    Ok(out)
+}
+
+fn resolve_encoder(requested: VideoEncoder, available_hw: &[String]) -> Result<VideoEncoder, String> {
+    let has_nvidia = available_hw.iter().any(|x| x == "nvidia");
+    let has_intel = available_hw.iter().any(|x| x == "intel");
+    let has_amd = available_hw.iter().any(|x| x == "amd");
+
+    let chosen = match requested {
+        VideoEncoder::Auto => {
+            if has_nvidia {
+                VideoEncoder::Nvidia
+            } else if has_intel {
+                VideoEncoder::Intel
+            } else if has_amd {
+                VideoEncoder::Amd
+            } else {
+                VideoEncoder::Cpu
+            }
+        }
+        VideoEncoder::Nvidia if !has_nvidia => {
+            return Err("NVIDIA encoder is not available on this machine".to_string())
+        }
+        VideoEncoder::Intel if !has_intel => {
+            return Err("Intel encoder is not available on this machine".to_string())
+        }
+        VideoEncoder::Amd if !has_amd => {
+            return Err("AMD encoder is not available on this machine".to_string())
+        }
+        x => x,
+    };
+
+    Ok(chosen)
+}
+
+#[derive(Clone)]
+struct LogSnapshot {
+    success: bool,
+    status_message: String,
+    started_at: SystemTime,
+    finished_at: SystemTime,
+    elapsed_sec: f64,
+    input_video: String,
+    output_video: String,
+    ffmpeg_path: String,
+    ffmpeg_version: String,
+    requested_encoder: VideoEncoder,
+    chosen_encoder: VideoEncoder,
+    available_hw: Vec<String>,
+    preset: ExportPreset,
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+    effects: EffectsConfig,
+    beat_points: usize,
+    filter_len: usize,
+    render_report: Option<media::RenderExecutionReport>,
+}
+
+fn write_export_log(output_path: &str, snap: LogSnapshot) -> Result<(), String> {
+    let out_path = PathBuf::from(output_path);
+    let log_path = out_path.with_extension("json");
+
+    let started_epoch = snap
+        .started_at
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let finished_epoch = snap
+        .finished_at
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let command_line = snap
+        .render_report
+        .as_ref()
+        .map(|r| r.command_line.clone())
+        .unwrap_or_else(|| "(command unavailable due to startup failure)".to_string());
+    let ffmpeg_exit = snap
+        .render_report
+        .as_ref()
+        .map(|r| r.exit_status.clone())
+        .unwrap_or_else(|| "(unknown)".to_string());
+    let stderr_text = snap
+        .render_report
+        .as_ref()
+        .map(|r| r.stderr_text.clone())
+        .unwrap_or_default();
+
+    let payload = serde_json::json!({
+        "tool": "naVShorts",
+        "status": if snap.success { "completed" } else { "failed" },
+        "message": snap.status_message,
+        "started_unix": started_epoch,
+        "finished_unix": finished_epoch,
+        "elapsed_sec": snap.elapsed_sec,
+        "input": snap.input_video,
+        "output": snap.output_video,
+        "log_file": log_path.display().to_string(),
+        "ffmpeg": {
+            "path": snap.ffmpeg_path,
+            "version": snap.ffmpeg_version,
+            "exit_status": ffmpeg_exit,
+            "command": command_line,
+            "stderr": stderr_text
+        },
+        "encoder": {
+            "requested": format!("{:?}", snap.requested_encoder),
+            "chosen": format!("{:?}", snap.chosen_encoder),
+            "available_hw": snap.available_hw
+        },
+        "preset": {
+            "name": format!("{:?}", snap.preset),
+            "width": snap.width,
+            "height": snap.height,
+            "frame_rate": snap.frame_rate
+        },
+        "effects": {
+            "zoom_mode": format!("{:?}", snap.effects.zoom_mode),
+            "zoom_strength": snap.effects.zoom_strength,
+            "bounce_strength": snap.effects.bounce_strength,
+            "beat_sensitivity": snap.effects.beat_sensitivity,
+            "beat_points": snap.beat_points,
+            "filter_len": snap.filter_len
+        }
+    });
+
+    let text = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("failed to serialize export log json: {e}"))?;
+
+    fs::write(&log_path, text).map_err(|e| format!("failed to write export log json: {e}"))
+}
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -328,7 +551,8 @@ pub fn run() {
             get_project,
             render,
             get_render_status,
-            verify_runtime_tools
+            verify_runtime_tools,
+            get_encoder_options
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -354,3 +578,20 @@ mod tests {
         assert!(invalid.validate().is_err());
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -46,10 +46,20 @@
       <select id="preset">
         <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
         <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
+        <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
       </select>
 
       <label>Output path</label>
       <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
+
+      <label>Video encoder</label>
+      <select id="encoder">
+        <option value="auto" selected>Auto (recommended)</option>
+        <option value="cpu">CPU (libx264)</option>
+        <option value="nvidia">NVIDIA (NVENC)</option>
+        <option value="intel">Intel (QSV)</option>
+        <option value="amd">AMD (AMF)</option>
+      </select>
 
       <div class="row">
         <button id="previewBtn" class="secondary">Render Preview</button>
@@ -70,6 +80,9 @@
     </section>
   </main>
 
-  <script type="module" src="./app.js?v=20260307-3"></script>
+  <script type="module" src="./app.js?v=20260307-4"></script>
 </body>
 </html>
+
+
+
