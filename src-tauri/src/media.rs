@@ -1,15 +1,22 @@
-use std::collections::HashSet;
+﻿use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::{VideoEncoder, VideoInfo, ZoomMode};
+
+#[derive(Debug, Clone)]
+pub struct ReframeTrackPoint {
+    pub time_sec: f64,
+    pub center_x_ratio: f64,
+}
 
 #[derive(Debug, Clone)]
 pub struct RenderExecutionReport {
@@ -248,7 +255,6 @@ pub fn build_filtergraph(
         },
         ZoomMode::ZoomSineSmooth => {
             let amp = zoom_strength * 0.25;
-            // Smooth sine zoom like: 1 + 0.25*sin(t*2), but clamped to stay >= 1.
             format!("1+{amp:.5}*(0.5+0.5*sin(t*2))")
         }
     };
@@ -282,6 +288,80 @@ pub fn build_filtergraph(
         size = size,
         post = post_fx
     )
+}
+
+pub fn build_reframe_filtergraph(
+    output_width: u32,
+    output_height: u32,
+    track_points: &[ReframeTrackPoint],
+) -> String {
+    let center_expr = build_center_x_expr(track_points);
+    let size = format!("{}:{}", output_width, output_height);
+
+    format!(
+        "scale='if(gt(a,9/16),-2,1080)':'if(gt(a,9/16),1920,-2)',crop=1080:1920:x='min(max(iw*({center})-540,0),iw-1080)':y='max((ih-1920)/2,0)',scale={size}:flags=lanczos",
+        center = center_expr,
+        size = size
+    )
+}
+
+pub fn estimate_face_track_points(
+    ffmpeg_path: &Path,
+    input_video: &Path,
+    target_face_image: &Path,
+    source_width: u32,
+    source_height: u32,
+    tracking_strength: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    let s = tracking_strength.clamp(0.0, 1.0);
+    let sample_width = ((320.0 + 192.0 * s).round() as u32).clamp(320, 512);
+    let sample_fps = 2.0 + (4.0 * s);
+    let max_points = (64.0 + 96.0 * s).round() as usize;
+    let alpha = 0.25 + 0.45 * s;
+
+    // Preferred path: detector-based tracking (stronger than template matching on difficult clips).
+    if let Ok(points) = detect_faces_track_points_ffmpeg(ffmpeg_path, input_video, sample_width, sample_fps) {
+        if points.len() >= 8 {
+            return Ok(compress_track_points(&points, max_points, alpha));
+        }
+    }
+
+    // Fallback path: target-image template matching.
+    let template_size = ((source_width as f64 / 72.0).round() as u32).clamp(32, 64);
+    let target = load_template_gray(ffmpeg_path, target_face_image, template_size)?;
+    let sample_height = scaled_even_height(source_width, source_height, sample_width);
+    let video_raw = sample_video_gray(ffmpeg_path, input_video, sample_fps, sample_width)?;
+    let frame_size = (sample_width * sample_height) as usize;
+    if frame_size == 0 || video_raw.len() < frame_size {
+        return Ok(Vec::new());
+    }
+
+    let total_frames = video_raw.len() / frame_size;
+    let mut points = Vec::with_capacity(total_frames.min(240));
+    let mut prev_x = (sample_width / 2) as f64;
+
+    for i in 0..total_frames {
+        let start = i * frame_size;
+        let end = start + frame_size;
+        let frame = &video_raw[start..end];
+
+        if let Some((best_x, _best_y, confidence)) =
+            template_match_best(frame, sample_width as usize, sample_height as usize, &target, template_size as usize)
+        {
+            let conf_threshold = 0.50 - (0.25 * s);
+            if confidence >= conf_threshold {
+                prev_x = best_x as f64 + (template_size as f64 / 2.0);
+            }
+        }
+
+        let center_x_ratio = (prev_x / sample_width as f64).clamp(0.1, 0.9);
+        points.push(ReframeTrackPoint {
+            time_sec: i as f64 / sample_fps,
+            center_x_ratio,
+        });
+    }
+
+    Ok(compress_track_points(&points, max_points, alpha))
 }
 
 pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
@@ -398,10 +478,17 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
         .stdout
         .take()
         .ok_or_else(|| anyhow!("failed to capture ffmpeg progress stream"))?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| anyhow!("failed to capture ffmpeg stderr stream"))?;
+
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut r = stderr;
+        let _ = r.read_to_end(&mut buf);
+        buf
+    });
 
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -416,18 +503,20 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
         if let Some(val) = trimmed.strip_prefix("out_time_ms=") {
             if let Ok(ms) = val.parse::<f64>() {
                 if duration_sec > 0.0 {
-                    progress(
-                        (ms / 1_000_000.0 / duration_sec).clamp(0.0, 0.999),
-                        "Rendering".to_string(),
-                    );
+                    progress((ms / 1_000_000.0 / duration_sec).clamp(0.0, 0.999), "Rendering".to_string());
+                }
+            }
+        } else if let Some(val) = trimmed.strip_prefix("out_time_us=") {
+            if let Ok(us) = val.parse::<f64>() {
+                if duration_sec > 0.0 {
+                    progress((us / 1_000_000.0 / duration_sec).clamp(0.0, 0.999), "Rendering".to_string());
                 }
             }
         }
     }
 
     let status = child.wait()?;
-    let mut stderr_buf = Vec::new();
-    let _ = stderr.read_to_end(&mut stderr_buf);
+    let stderr_buf = stderr_handle.join().unwrap_or_default();
     let stderr_text = String::from_utf8_lossy(&stderr_buf).to_string();
 
     let _ = fs::remove_file(&filter_script_path);
@@ -486,6 +575,381 @@ fn persist_filter_script_for_debug(output: &Path, filtergraph: &str) -> Result<P
     Ok(debug_path)
 }
 
+fn build_center_x_expr(points: &[ReframeTrackPoint]) -> String {
+    if points.is_empty() {
+        return "0.5".to_string();
+    }
+    if points.len() == 1 {
+        return format!("{:.5}", points[0].center_x_ratio.clamp(0.0, 1.0));
+    }
+
+    let first_t = points[0].time_sec;
+    let first_x = points[0].center_x_ratio.clamp(0.0, 1.0);
+    let last_t = points[points.len() - 1].time_sec;
+    let last_x = points[points.len() - 1].center_x_ratio.clamp(0.0, 1.0);
+
+    let mut seg_terms = Vec::with_capacity(points.len().saturating_sub(1));
+    for pair in points.windows(2) {
+        let a = &pair[0];
+        let b = &pair[1];
+        let dt = (b.time_sec - a.time_sec).max(0.0001);
+        seg_terms.push(format!(
+            "(between(t,{a_t:.5},{b_t:.5})*({a_val:.5}+({b_val:.5}-{a_val:.5})*((t-{a_t:.5})/{dt:.5})))",
+            a_t = a.time_sec,
+            b_t = b.time_sec,
+            a_val = a.center_x_ratio.clamp(0.0, 1.0),
+            b_val = b.center_x_ratio.clamp(0.0, 1.0),
+            dt = dt
+        ));
+    }
+
+    let mid_expr = if seg_terms.is_empty() {
+        format!("{first_x:.5}")
+    } else {
+        seg_terms.join("+")
+    };
+
+    format!(
+        "if(lt(t,{first_t:.5}),{first_x:.5},if(gte(t,{last_t:.5}),{last_x:.5},({mid})))",
+        first_t = first_t,
+        first_x = first_x,
+        last_t = last_t,
+        last_x = last_x,
+        mid = mid_expr
+    )
+}
+
+fn scaled_even_height(src_w: u32, src_h: u32, dst_w: u32) -> u32 {
+    if src_w == 0 {
+        return 180;
+    }
+    let mut h = ((src_h as f64 * dst_w as f64) / src_w as f64).round() as u32;
+    if h % 2 == 1 {
+        h += 1;
+    }
+    h.max(2)
+}
+
+fn load_template_gray(ffmpeg_path: &Path, image_path: &Path, size: u32) -> Result<Vec<u8>> {
+    let filter = format!(
+        "scale={s}:{s}:force_original_aspect_ratio=increase,crop={s}:{s},format=gray",
+        s = size
+    );
+    let out = Command::new(ffmpeg_path)
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(image_path)
+        .arg("-vf")
+        .arg(filter)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("rawvideo")
+        .arg("-pix_fmt")
+        .arg("gray")
+        .arg("-")
+        .output()
+        .with_context(|| format!("failed to load target face image: {}", image_path.display()))?;
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "ffmpeg failed to decode target face image: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    let expected = (size * size) as usize;
+    if out.stdout.len() < expected {
+        return Err(anyhow!(
+            "target face decode returned too little data: got {}, expected {}",
+            out.stdout.len(),
+            expected
+        ));
+    }
+
+    Ok(out.stdout[..expected].to_vec())
+}
+
+fn sample_video_gray(ffmpeg_path: &Path, input_video: &Path, fps: f64, width: u32) -> Result<Vec<u8>> {
+    let filter = format!("fps={fps:.3},scale={width}:-2:flags=bicubic,format=gray");
+    let out = Command::new(ffmpeg_path)
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(input_video)
+        .arg("-vf")
+        .arg(filter)
+        .arg("-f")
+        .arg("rawvideo")
+        .arg("-pix_fmt")
+        .arg("gray")
+        .arg("-")
+        .output()
+        .with_context(|| format!("failed to sample video for tracking: {}", input_video.display()))?;
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "ffmpeg failed while sampling video for tracking: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    Ok(out.stdout)
+}
+
+fn detect_faces_track_points_ffmpeg(
+    ffmpeg_path: &Path,
+    input_video: &Path,
+    sample_width: u32,
+    sample_fps: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    #[derive(Clone, Copy)]
+    struct FaceRect {
+        x: f64,
+        w: f64,
+        h: f64,
+    }
+
+    let vf = format!(
+        "fps={fps:.3},scale={w}:-2:flags=bicubic,facedetect,metadata=mode=print:file=-",
+        fps = sample_fps,
+        w = sample_width
+    );
+
+    let out = Command::new(ffmpeg_path)
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(input_video)
+        .arg("-vf")
+        .arg(vf)
+        .arg("-an")
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to run facedetect on {}", input_video.display()))?;
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "facedetect run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    if !out.stderr.is_empty() {
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+    }
+
+    let mut points = Vec::new();
+    let mut frame_idx: usize = 0;
+    let mut current_frame: Option<usize> = None;
+    let mut frame_rects: Vec<FaceRect> = Vec::new();
+
+    let mut rx: Option<f64> = None;
+    let mut ry: Option<f64> = None;
+    let mut rw: Option<f64> = None;
+    let mut rh: Option<f64> = None;
+
+    let mut prev_center_x: Option<f64> = None;
+
+    let flush_rect = |frame_rects: &mut Vec<FaceRect>, rx: &mut Option<f64>, ry: &mut Option<f64>, rw: &mut Option<f64>, rh: &mut Option<f64>| {
+        if let (Some(x), Some(_y), Some(w), Some(h)) = (*rx, *ry, *rw, *rh) {
+            if w > 2.0 && h > 2.0 {
+                frame_rects.push(FaceRect { x, w, h });
+            }
+        }
+        *rx = None;
+        *ry = None;
+        *rw = None;
+        *rh = None;
+    };
+
+    let flush_frame = |points: &mut Vec<ReframeTrackPoint>,
+                       frame_rects: &mut Vec<FaceRect>,
+                       current_frame: Option<usize>,
+                       prev_center_x: &mut Option<f64>| {
+        if frame_rects.is_empty() {
+            return;
+        }
+
+        let chosen = if let Some(prev) = *prev_center_x {
+            frame_rects
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    let ca = a.x + a.w * 0.5;
+                    let cb = b.x + b.w * 0.5;
+                    let da = (ca - prev).abs() - a.w * 0.10;
+                    let db = (cb - prev).abs() - b.w * 0.10;
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(frame_rects[0])
+        } else {
+            frame_rects
+                .iter()
+                .copied()
+                .max_by(|a, b| {
+                    let aa = a.w * a.h;
+                    let bb = b.w * b.h;
+                    aa.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(frame_rects[0])
+        };
+
+        let cx = chosen.x + chosen.w * 0.5;
+        *prev_center_x = Some(cx);
+
+        let fi = current_frame.unwrap_or(points.len());
+        points.push(ReframeTrackPoint {
+            time_sec: fi as f64 / sample_fps,
+            center_x_ratio: (cx / sample_width as f64).clamp(0.1, 0.9),
+        });
+
+        frame_rects.clear();
+    };
+
+    for line in text.lines() {
+        let l = line.trim();
+
+        if let Some(rest) = l.strip_prefix("frame:") {
+            flush_rect(&mut frame_rects, &mut rx, &mut ry, &mut rw, &mut rh);
+            flush_frame(&mut points, &mut frame_rects, current_frame, &mut prev_center_x);
+
+            let num = rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(frame_idx);
+            current_frame = Some(num);
+            frame_idx += 1;
+            continue;
+        }
+
+        if let Some((k, v)) = l.split_once('=') {
+            let parsed = v.trim().parse::<f64>();
+            if parsed.is_err() {
+                continue;
+            }
+            let val = parsed.unwrap_or(0.0);
+
+            let is_x = k == "lavfi.rect.x" || k.ends_with(".rect.x") || k.ends_with(".x");
+            let is_y = k == "lavfi.rect.y" || k.ends_with(".rect.y") || k.ends_with(".y");
+            let is_w = k == "lavfi.rect.w" || k.ends_with(".rect.w") || k.ends_with(".w");
+            let is_h = k == "lavfi.rect.h" || k.ends_with(".rect.h") || k.ends_with(".h");
+
+            if is_x {
+                rx = Some(val);
+            } else if is_y {
+                ry = Some(val);
+            } else if is_w {
+                rw = Some(val);
+            } else if is_h {
+                rh = Some(val);
+                flush_rect(&mut frame_rects, &mut rx, &mut ry, &mut rw, &mut rh);
+            }
+        }
+    }
+
+    flush_rect(&mut frame_rects, &mut rx, &mut ry, &mut rw, &mut rh);
+    flush_frame(&mut points, &mut frame_rects, current_frame, &mut prev_center_x);
+
+    if points.is_empty() {
+        return Err(anyhow!("facedetect produced no usable face boxes"));
+    }
+
+    Ok(points)
+}
+fn template_match_best(
+    frame: &[u8],
+    frame_w: usize,
+    frame_h: usize,
+    templ: &[u8],
+    templ_size: usize,
+) -> Option<(usize, usize, f64)> {
+    if frame_w < templ_size || frame_h < templ_size {
+        return None;
+    }
+
+    let stride = 4usize;
+    let mut best_score = f64::INFINITY;
+    let mut best_x = 0usize;
+    let mut best_y = 0usize;
+
+    let max_x = frame_w - templ_size;
+    let max_y = frame_h - templ_size;
+
+    let mut y = 0usize;
+    while y <= max_y {
+        let mut x = 0usize;
+        while x <= max_x {
+            let mut sad: u64 = 0;
+            for ty in 0..templ_size {
+                let f_row = (y + ty) * frame_w + x;
+                let t_row = ty * templ_size;
+                for tx in 0..templ_size {
+                    let a = frame[f_row + tx] as i32;
+                    let b = templ[t_row + tx] as i32;
+                    sad += (a - b).unsigned_abs() as u64;
+                }
+            }
+
+            let norm = sad as f64 / (templ_size * templ_size) as f64 / 255.0;
+            if norm < best_score {
+                best_score = norm;
+                best_x = x;
+                best_y = y;
+            }
+
+            x += stride;
+        }
+        y += stride;
+    }
+
+    let confidence = (1.0 - best_score).clamp(0.0, 1.0);
+    Some((best_x, best_y, confidence))
+}
+
+fn compress_track_points(points: &[ReframeTrackPoint], max_points: usize, alpha: f64) -> Vec<ReframeTrackPoint> {
+    if points.len() <= max_points {
+        return smooth_track_points(points, alpha);
+    }
+
+    let step = (points.len() as f64 / max_points as f64).ceil() as usize;
+    let mut out = Vec::with_capacity(max_points + 1);
+    for i in (0..points.len()).step_by(step.max(1)) {
+        out.push(points[i].clone());
+    }
+    if let Some(last) = points.last() {
+        if out.last().map(|p| p.time_sec) != Some(last.time_sec) {
+            out.push(last.clone());
+        }
+    }
+    smooth_track_points(&out, alpha)
+}
+
+fn smooth_track_points(points: &[ReframeTrackPoint], alpha: f64) -> Vec<ReframeTrackPoint> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(points.len());
+    let mut ema = points[0].center_x_ratio;
+    let alpha = alpha.clamp(0.05, 0.90);
+    for p in points {
+        ema = (alpha * p.center_x_ratio + (1.0 - alpha) * ema).clamp(0.0, 1.0);
+        out.push(ReframeTrackPoint {
+            time_sec: p.time_sec,
+            center_x_ratio: ema,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,4 +993,32 @@ mod tests {
     fn rational_parser_works() {
         assert_eq!(parse_rational("30000/1001").map(|v| v.round() as i32), Some(30));
     }
+
+    #[test]
+    fn reframe_filtergraph_uses_dynamic_crop_x() {
+        let points = vec![
+            ReframeTrackPoint {
+                time_sec: 0.0,
+                center_x_ratio: 0.4,
+            },
+            ReframeTrackPoint {
+                time_sec: 1.0,
+                center_x_ratio: 0.6,
+            },
+        ];
+        let g = build_reframe_filtergraph(1080, 1920, &points);
+        assert!(g.contains("crop=1080:1920"));
+        assert!(g.contains("if(lt(t,1.00000)"));
+    }
 }
+
+
+
+
+
+
+
+
+
+
+

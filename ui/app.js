@@ -41,6 +41,7 @@ const motionBlurStrengthValue = $("motionBlurStrengthValue");
 
 const preset = $("preset");
 const encoder = $("encoder");
+const gotoReframeBtn = $("gotoReframeBtn");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -264,3 +265,30 @@ async function initEncoderOptions() {
   }
 }
 
+
+
+async function applyIncomingReframedInput() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const incoming = params.get("reframed");
+    if (!incoming) {
+      return;
+    }
+    videoPath.value = incoming;
+    await invoke("open_video", { path: incoming });
+    outputPath.value = buildDefaultOutputPath(incoming);
+    printStatus("Reframed video loaded from Reframe workspace.");
+    await refreshProject();
+  } catch (e) {
+    printStatus(String(e));
+  }
+}
+
+
+if (gotoReframeBtn) {
+  gotoReframeBtn.addEventListener("click", () => {
+    window.location.assign("./reframe.html");
+  });
+}
+
+applyIncomingReframedInput().catch(() => {});

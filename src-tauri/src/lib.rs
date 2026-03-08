@@ -1,4 +1,4 @@
-mod core;
+﻿mod core;
 mod media;
 
 use std::collections::HashMap;
@@ -12,8 +12,8 @@ use core::{
     dynamic_loop_zoom_envelope, normalize_beat_map, BeatPoint,
 };
 use media::{
-    build_filtergraph, detect_hardware_encoders, ffmpeg_binary, ffprobe_binary, probe_video,
-    render_with_ffmpeg, tool_version_line,
+    build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points,
+    ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, tool_version_line,
 };
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -130,6 +130,22 @@ pub enum VideoEncoder {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReframeRenderRequest {
+    pub input_path: String,
+    pub output_path: String,
+    pub target_face_path: Option<String>,
+    pub preview: bool,
+    pub encoder: Option<VideoEncoder>,
+    #[serde(default = "default_tracking_strength")]
+    pub tracking_strength: f64,
+}
+
+fn default_tracking_strength() -> f64 {
+    0.65
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenderRequest {
     pub output_path: String,
     pub preset: ExportPreset,
@@ -167,6 +183,15 @@ struct AppState {
 fn pick_video_file() -> Result<Option<String>, String> {
     let picked = FileDialog::new()
         .add_filter("Video", &["mp4", "mov", "mkv", "avi", "webm"])
+        .pick_file();
+
+    Ok(picked.map(|p| p.display().to_string()))
+}
+
+#[tauri::command]
+fn pick_image_file() -> Result<Option<String>, String> {
+    let picked = FileDialog::new()
+        .add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"])
         .pick_file();
 
     Ok(picked.map(|p| p.display().to_string()))
@@ -401,6 +426,172 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
 }
 
 #[tauri::command]
+fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Result<String, String> {
+    let input_video = request.input_path.trim().to_string();
+    let output_path = request.output_path.trim().to_string();
+
+    if input_video.is_empty() {
+        return Err("Input path is empty".to_string());
+    }
+    if output_path.is_empty() {
+        return Err("Output path is empty".to_string());
+    }
+    if input_video.eq_ignore_ascii_case(&output_path) {
+        return Err("Output path must be different from input video path".to_string());
+    }
+
+    let input_path = PathBuf::from(&input_video);
+    if !input_path.exists() {
+        return Err(format!("Input file does not exist: {input_video}"));
+    }
+
+    let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
+    let ffprobe = ffprobe_binary().map_err(|e| format!("{e:#}"))?;
+    let info = probe_video(&ffprobe, &input_path).map_err(|e| format!("{e:#}"))?;
+
+    let ffmpeg_ver = tool_version_line(&ffmpeg).unwrap_or_else(|_| "unknown".to_string());
+    let available_hw = detect_hardware_encoders(&ffmpeg).map_err(|e| format!("{e:#}"))?;
+    let requested_encoder = request.encoder.clone().unwrap_or(VideoEncoder::Auto);
+    let chosen_encoder = resolve_encoder(requested_encoder.clone(), &available_hw)?;
+
+    let frame_rate = if request.preview { 24 } else { 30 };
+    let (out_width, out_height) = if request.preview { (540, 960) } else { (1080, 1920) };
+
+    let mut track_points = Vec::new();
+    let tracking_strength = request.tracking_strength.clamp(0.0, 1.0);
+    if let Some(face_path_raw) = request.target_face_path.as_ref() {
+        let face_path_trim = face_path_raw.trim();
+        if !face_path_trim.is_empty() {
+            let face_path = PathBuf::from(face_path_trim);
+            if face_path.exists() {
+                track_points = estimate_face_track_points(
+                    &ffmpeg,
+                    &input_path,
+                    &face_path,
+                    info.width,
+                    info.height,
+                    tracking_strength,
+                )
+                .map_err(|e| format!("face tracking analysis failed: {e:#}"))?;
+            }
+        }
+    }
+
+    let filtergraph = build_reframe_filtergraph(out_width, out_height, &track_points);
+
+    let job_id = Uuid::new_v4().to_string();
+    let status = Arc::new(Mutex::new(RenderStatus {
+        job_id: job_id.clone(),
+        state: RenderState::Queued,
+        progress: 0.0,
+        message: if track_points.is_empty() {
+            "Queued (center reframe)".to_string()
+        } else {
+            format!("Queued (face track points: {}, strength={:.2})", track_points.len(), tracking_strength)
+        },
+        output_path: None,
+    }));
+
+    {
+        let mut renders = state.renders.lock().map_err(|_| "State lock poisoned")?;
+        renders.insert(job_id.clone(), status.clone());
+    }
+
+    std::thread::spawn(move || {
+        let started_at = SystemTime::now();
+        let started_timer = Instant::now();
+
+        {
+            if let Ok(mut s) = status.lock() {
+                s.state = RenderState::Running;
+                s.message = if track_points.is_empty() {
+                    "Rendering started (center reframe)".to_string()
+                } else {
+                    format!("Rendering started (face tracking, points={}, strength={:.2})", track_points.len(), tracking_strength)
+                };
+            }
+        }
+
+        let render_result = render_with_ffmpeg(
+            &ffmpeg,
+            Path::new(&input_video),
+            Path::new(&output_path),
+            &filtergraph,
+            frame_rate,
+            info.duration_sec,
+            chosen_encoder.clone(),
+            |progress: f64, message: String| {
+                if let Ok(mut s) = status.lock() {
+                    s.progress = progress.clamp(0.0, 1.0);
+                    s.message = message;
+                }
+            },
+        );
+
+        let elapsed_sec = started_timer.elapsed().as_secs_f64();
+        let finished_at = SystemTime::now();
+
+        let mut final_message = String::new();
+        let mut final_ok = false;
+
+        if let Ok(mut s) = status.lock() {
+            match &render_result {
+                Ok(_) => {
+                    s.state = RenderState::Completed;
+                    s.progress = 1.0;
+                    s.message = if track_points.is_empty() {
+                        "Reframe completed (center)".to_string()
+                    } else {
+                        format!("Reframe completed (face tracked, points={}, strength={:.2})", track_points.len(), tracking_strength)
+                    };
+                    s.output_path = Some(output_path.clone());
+                    final_message = s.message.clone();
+                    final_ok = true;
+                }
+                Err(err) => {
+                    s.state = RenderState::Failed;
+                    s.message = format!("Render failed: {err:#}");
+                    final_message = s.message.clone();
+                }
+            }
+        }
+
+        let _ = write_export_log(
+            &output_path,
+            LogSnapshot {
+                success: final_ok,
+                status_message: final_message,
+                started_at,
+                finished_at,
+                elapsed_sec,
+                input_video: input_video.clone(),
+                output_video: output_path.clone(),
+                ffmpeg_path: ffmpeg.display().to_string(),
+                ffmpeg_version: ffmpeg_ver.clone(),
+                requested_encoder,
+                chosen_encoder,
+                available_hw,
+                preset: ExportPreset::Shorts1080x1920,
+                width: out_width,
+                height: out_height,
+                frame_rate,
+                effects: EffectsConfig {
+                    zoom_mode: ZoomMode::None,
+                    zoom_strength: 0.0,
+                    bounce_strength: 0.0,
+                    beat_sensitivity: 0.5,
+                    motion_blur_strength: 0.0,
+                },
+                beat_points: track_points.len(),
+                filter_len: filtergraph.len(),
+                render_report: render_result.ok(),
+            },
+        );
+    });
+
+    Ok(job_id)
+}
+#[tauri::command]
 fn get_render_status(job_id: String, state: State<AppState>) -> Result<RenderStatus, String> {
     let renders = state.renders.lock().map_err(|_| "State lock poisoned")?;
     let status = renders
@@ -572,11 +763,13 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             pick_video_file,
+            pick_image_file,
             open_video,
             analyze_beats,
             set_effects,
             get_project,
             render,
+            render_reframe,
             get_render_status,
             verify_runtime_tools,
             get_encoder_options
@@ -645,6 +838,14 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
+
+
+
+
 
 
 

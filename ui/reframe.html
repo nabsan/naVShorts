@@ -1,0 +1,67 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shorts/Reels Maker - Reframe</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="layout">
+    <section class="panel">
+      <h1>Reframe Workspace</h1>
+      <p class="sub">Step 1: Horizontal source to vertical 9:16 base export. (Face tracking UI prepared)</p>
+
+      <div class="row">
+        <button id="backToEffectsBtn" class="secondary">Back To Effects Workspace</button>
+        <button id="verifyBtn" class="secondary">Verify FFmpeg</button>
+      </div>
+
+      <label>Source video path</label>
+      <input id="sourceVideoPath" placeholder="C:\\videos\\source_16x9.mp4" readonly />
+      <button id="openSourceBtn">Select Source Video</button>
+
+      <label>Target face image path</label>
+      <input id="targetFacePath" placeholder="C:\\images\\target_face.jpg" readonly />
+      <button id="pickTargetFaceBtn" class="secondary">Select Target Face Image</button>
+
+      <label>Face tracking strength <span id="trackingStrengthValue">0.65</span></label>
+      <input id="trackingStrength" type="range" min="0" max="1" step="0.01" value="0.65" />
+      <label>Reframe output path</label>
+      <input id="reframeOutputPath" placeholder="C:\\videos\\source_reframed_yymmddhhmmss.mp4" />
+
+      <label>Video encoder</label>
+      <select id="encoder">
+        <option value="auto" selected>Auto (recommended)</option>
+        <option value="cpu">CPU (libx264)</option>
+        <option value="nvidia">NVIDIA (NVENC)</option>
+        <option value="intel">Intel (QSV)</option>
+        <option value="amd">AMD (AMF)</option>
+      </select>
+
+      <div class="row">
+        <button id="previewBtn" class="secondary">Render Reframe Preview</button>
+        <button id="exportBtn">Export Reframed Video</button>
+      </div>
+
+      <button id="sendToEffectsBtn" class="secondary">Send Reframed Video To Effects</button>
+    </section>
+
+    <section class="panel">
+      <h2>Status</h2>
+      <div class="progressWrap">
+        <progress id="renderProgress" max="1" value="0"></progress>
+        <div id="etaInfo" class="eta">Idle</div>
+      </div>
+      <pre id="statusInfo">Idle.</pre>
+
+      <h2>Project</h2>
+      <pre id="projectInfo">No video loaded.</pre>
+    </section>
+  </main>
+
+  <script type="module" src="./reframe.js?v=20260308-4"></script>
+</body>
+</html>
+
+

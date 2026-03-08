@@ -1,4 +1,4 @@
-# Shorts/Reels Maker (Windows)
+﻿# Shorts/Reels Maker (Windows)
 
 A Windows desktop app for creating **9:16 vertical videos** for **YouTube Shorts** and **Instagram Reels**.
 Built with **Tauri + Rust + FFmpeg**.
@@ -103,6 +103,20 @@ Right panel:
 - `Status` on top (progress + ETA).
 - `Project` JSON below.
 
+
+## Reframe Workspace (Current)
+- Separate workspace page (`reframe.html`) to avoid mixing with Effects UI.
+- `Select Source Video` for horizontal source clip.
+- `Select Target Face Image` for target person reference.
+- `Face tracking strength` slider (`0.00-1.00`, default `0.65`).
+- `Render Reframe Preview` / `Export Reframed Video`.
+- `Send Reframed Video To Effects` sends output path back to main workspace.
+
+### Reframe Tracking Logic (Current)
+- First tries detector-based face tracking via FFmpeg `facedetect` metadata parsing.
+- If detector path is unavailable/insufficient, falls back to template matching with selected face image.
+- Tracking strength controls sampling FPS, analysis resolution, confidence gate, smoothing, and track-point density.
+- Output remains `1080x1920` (or `540x960` preview) and uses selected encoder.
 ## Development
 ```powershell
 npm install
@@ -112,3 +126,4 @@ npm.cmd run tauri dev
 ## Notes
 - Screenshot naming guide: `docs/screenshots/README.md`
 - v1 focuses on a reliable single-clip flow.
+
