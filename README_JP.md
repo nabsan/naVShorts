@@ -1,81 +1,104 @@
-﻿# Shorts/Reels Maker (Windows)
+﻿# naVShorts (Windows)
 
-YouTube Shorts / Instagram Reels向けの**9:16縦動画**を作るWindowsデスクトップアプリです。  
-技術スタックは **Tauri + Rust + FFmpeg** です。
+Windows向けの縦動画作成アプリです。  
+技術スタック: **Tauri + Rust + FFmpeg**
 
-## このアプリでできること
-- ローカル動画を1本読み込み
-- 9:16へ自動フィット/クロップ
-- エフェクト追加（Zoom + Beat Bounce）
-- 音声からビート解析
-- MP4（H.264 + AAC）で書き出し
-- CPU/GPUエンコード対応（CPU/NVIDIA/Intel/AMD）
-- 進捗バーとETA（残り予測時間）表示
-- 出力動画の横に実行ログ（JSON）を書き出し
-- 出力動画の横にFFmpegフィルタースクリプト（debug用）を保存
+## できること
+- Shorts / Reels / TikTok向けの9:16動画を作成
+- UIを混在させない2ワークスペース構成
+  - **Reframe Workspace**: 横動画 -> 縦動画のベース作成（人物追従）
+  - **Effects Workspace**: ズーム/バウンス演出と最終書き出し
+- 書き出し中の進捗とETA表示
+- 出力動画の横にログ（`.json`）とフィルタースクリプト（`.filter_script.txt`）保存
 
-## 現在の仕様（v1）
-- 1クリップ編集のみ
-- 出力サイズ:
-  - 本番プリセット: `1080x1920` と `2160x3840 (縦4K)`
-  - プレビュー: `540x960`
+## 現在のワークスペース
+
+### 1) Reframe Workspace（Step 1）
+- ソース動画を選択
+- **Target face folder**（同一人物の顔写真フォルダ）を選択
+- スライダー調整:
+  - `Face tracking strength`（初期値 `0.72`）
+  - `Identity threshold`（初期値 `0.58`）
+  - `Stability`（初期値 `0.68`）
+- プレビュー書き出し / 本番書き出し
+- `Send Reframed Video To Effects` でEffectsへ受け渡し
+
+### 2) Effects Workspace（Step 2）
+- 動画を開く（Reframeからの受け渡し可）
+- エフェクト:
+  - `None`
+  - `Zoom In`
+  - `Zoom Out`
+  - `Zoom In & Out (Beat Sync)`
+  - `Zoom In & Out (Loop)`
+  - `Zoom Sine Smooth`
+- スライダー:
+  - `Zoom strength`
+  - `Bounce strength`
+  - `Beat sensitivity`
+  - `Motion blur strength`
+- 必要なら `Analyze Beats`
+- 最終書き出し
+
+## 書き出し仕様
 - プリセット:
   - `YouTube Shorts (1080x1920)`
   - `Instagram Reels (1080x1920)`
   - `Vertical 4K (2160x3840)`
-- エンコーダー選択:
-  - `Auto`（推奨、利用可能なGPUを自動選択）
+- プレビュー: `540x960`
+- 映像/音声: `H.264 + AAC`（拡張子に応じてMP4/MOV）
+- エンコーダー:
+  - `Auto`（推奨）
   - `CPU`
   - `NVIDIA (NVENC)` / `Intel (QSV)` / `AMD (AMF)`（環境依存）
-- 入力動画の選択拡張子: `mp4, mov, mkv, avi, webm`
-- 出力初期ファイル名:
-  - 入力と同じフォルダ
-  - `<元名>_exported_yymmddhhmmss.<拡張子>`
-  - 例: `hoge.mp4` -> `hoge_exported_260307154512.mp4`
-- 出力時に作成されるファイル:
-  - ログ: `<出力ファイル名>.json`
-  - フィルタースクリプト: `<出力ファイル名>.filter_script.txt`
-
-## Zoom mode の違い
-- `None`: ズーム効果なし
-- `Zoom In`: 時間経過で徐々に寄る
-- `Zoom Out`: 時間経過で徐々に引く
-- `Zoom In & Out (Beat Sync)`: 検出ビートごとに寄り/引きを交互に切替
-  - `Analyze Beats` 後の利用を推奨
-- `Zoom In & Out (Loop)`: 時間ベースでヌメっと寄り/戻り
-  - 非対称周期（目安: 寄り約4秒 + 戻り約5秒）
-  - ビート解析済みの場合は強弱が穏やかに変化
-- `Zoom Sine Smooth (tmix optional)`: サイン波ズーム + 任意のフレームブレンド
-  - 彩度アップは廃止
-  - `Motion blur strength` でtmix量を調整（`0.00`でオフ）
-
-## スライダー
-すべて `0.00 ~ 1.00`。
-
-- `Zoom strength`: 上げるほどズームが強くなる
-- `Bounce strength`: 上げるほどビート時の跳ねが大きくなる
-- `Beat sensitivity`: 上げるほどビート検出点が増える
-- `Motion blur strength`:
-  - `0.00` = ブラーなし
-  - `0.01 - 0.33` = 弱め
-  - `0.34 - 0.66` = 中程度
-  - `0.67 - 1.00` = 強め
 
 ## 初心者向け Step by Step
-1. アプリ起動
-2. `Verify FFmpeg` を押す
-3. `Select & Open Video` で動画を選ぶ
-4. 自動入力された `Output path` を確認
-5. `Zoom mode` とスライダーを調整
-6. `Apply Effects` を押す
-7. `Zoom In & Out (Beat Sync)` を使う場合は `Analyze Beats`
-8. （任意）`Render Preview`
-9. `Preset` と `Encoder` を選ぶ
-10. `Export Final`
-11. 出力フォルダで次の3つを確認:
-   - 書き出し動画（`.mp4`）
-   - 実行ログ（`.json`）
-   - フィルタースクリプト（`.filter_script.txt`）
+1. `Verify FFmpeg/ONNX` を押す
+2. `Open Reframe Workspace` を開く
+3. `Select Source Video` で横動画を選ぶ
+4. `Select Target Face Folder` で対象人物の顔写真フォルダを選ぶ
+5. まずは初期値のまま追従スライダーで試す
+6. `Export Reframed Video`
+7. `Send Reframed Video To Effects`
+8. Effects側でZoom modeとスライダーを調整
+9. （必要なら）`Analyze Beats`
+10. 出力パス / preset / encoder を設定
+11. `Export Final`
+12. 出力フォルダで以下を確認
+   - 動画ファイル
+   - `.json`ログ
+   - `.filter_script.txt`
+
+## スライダーの意味（要点）
+- `Face tracking strength` を上げる: 追従更新が細かくなる
+- `Identity threshold` を上げる: 同一人物判定を厳しくする（上げすぎると見失いやすい）
+- `Stability` を上げる: 画角移動が滑らかになる（反応は遅め）
+- `Zoom strength` を上げる: ズーム演出が強くなる
+- `Bounce strength` を上げる: ビート時の揺れが大きくなる
+- `Beat sensitivity` を上げる: ビート検出数が増える
+- `Motion blur strength` を上げる: ブラーが強くなる
+
+## 大容量モデル（Git未push）の取得元とリネーム
+この2つのONNXは大容量のため、GitHubへはpushしていません（100MB制限対策）。  
+配置先は **`src-tauri/resources/models/`** です。
+
+### A) 顔検出モデル
+- 取得元（UltraFace ONNX）:
+  - [https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/tree/master/models/onnx](https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/tree/master/models/onnx)
+- 元ファイル名: `version-RFB-320-int8.onnx`
+- アプリが参照する名前: `face_detector.onnx`
+- このリポジトリ運用では、`version-RFB-320-int8.onnx` を `face_detector.onnx` にリネーム（またはコピー）して使用
+
+### B) 顔特徴量モデル（ArcFace）
+- 取得元（ONNX Model Zoo ArcFace）:
+  - [https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface](https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface)
+- 元ファイル名: `arcfaceresnet100-8.onnx`
+- アプリが参照する名前: `arcface.onnx`
+- このリポジトリ運用では、`arcfaceresnet100-8.onnx` を `arcface.onnx` にリネーム（またはコピー）して使用
+
+## なぜpushしないか
+- `.gitignore` で `*.onnx` を除外済み
+- 理由: リポジトリ軽量化とGitHubのサイズ制限回避
 
 ## 開発起動
 ```powershell

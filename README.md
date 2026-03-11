@@ -1,129 +1,110 @@
-﻿# Shorts/Reels Maker (Windows)
+﻿# naVShorts (Windows)
 
-A Windows desktop app for creating **9:16 vertical videos** for **YouTube Shorts** and **Instagram Reels**.
+Windows desktop app for vertical social videos.
 Built with **Tauri + Rust + FFmpeg**.
 
-## Screenshot Walkthrough
-![Main UI](docs/screenshots/01_main_ui.png)
+## What It Does
+- Creates 9:16 videos for Shorts/Reels/TikTok style delivery.
+- Keeps editing simple with two separated workspaces:
+  - **Reframe Workspace**: horizontal -> vertical conversion with person tracking.
+  - **Effects Workspace**: zoom/bounce effects + final export.
+- Shows export progress and ETA.
+- Saves export logs (`.json`) and FFmpeg filter script (`.filter_script.txt`) next to output.
 
-## What This App Does
-- Opens one local video file.
-- Auto-fits/crops it to vertical 9:16.
-- Adds motion effects (Zoom + Beat Bounce).
-- Detects audio beats from the source video.
-- Exports MP4 (H.264 + AAC).
-- Supports software and hardware encoding (CPU/NVIDIA/Intel/AMD).
-- Shows live render progress and ETA.
-- Writes export run logs as JSON next to exported file.
-- Persists FFmpeg filter script next to exported file for debugging.
+## Current Workspaces
 
-## Current Specs (v1)
-- Single-clip workflow (no multi-clip timeline yet).
-- Output canvas:
-  - Final export presets: `1080x1920` and `2160x3840 (Vertical 4K)`
-  - Preview export: `540x960`
-- Export presets:
+### 1) Reframe Workspace (Step 1)
+- Select source video.
+- Select **target face folder** (multiple reference photos of the same person).
+- Tune:
+  - `Face tracking strength` (default `0.72`)
+  - `Identity threshold` (default `0.58`)
+  - `Stability` (default `0.68`)
+- Render preview or final reframed export.
+- Send reframed output to Effects workspace.
+
+### 2) Effects Workspace (Step 2)
+- Open input video (or receive from Reframe workspace).
+- Apply effects:
+  - `None`
+  - `Zoom In`
+  - `Zoom Out`
+  - `Zoom In & Out (Beat Sync)`
+  - `Zoom In & Out (Loop)`
+  - `Zoom Sine Smooth`
+- Tune sliders:
+  - `Zoom strength`
+  - `Bounce strength`
+  - `Beat sensitivity`
+  - `Motion blur strength`
+- Analyze beats (optional) and export final video.
+
+## Export Specs
+- Presets:
   - `YouTube Shorts (1080x1920)`
   - `Instagram Reels (1080x1920)`
   - `Vertical 4K (2160x3840)`
-- Encoder options:
-  - `Auto` (recommended, auto-select available GPU encoder)
+- Preview: `540x960`
+- Video/audio: `H.264 + AAC` (MP4/MOV output depending on extension)
+- Encoder choice:
+  - `Auto` (recommended)
   - `CPU`
-  - `NVIDIA (NVENC)`, `Intel (QSV)`, `AMD (AMF)` when available
-- Supported input picker filter: `mp4, mov, mkv, avi, webm`
-- Output default naming:
-  - Same folder as input file
-  - `<original_name>_exported_yymmddhhmmss.<ext>`
-  - Example: `hoge.mp4` -> `hoge_exported_260307154512.mp4`
-- Export artifacts:
-  - Log JSON: `<output_basename>.json`
-  - Filter script: `<output_basename>.filter_script.txt`
+  - `NVIDIA (NVENC)` / `Intel (QSV)` / `AMD (AMF)` when available
 
-## Zoom Modes
-- `None`: no zoom animation.
-- `Zoom In`: gradually zooms in over time.
-- `Zoom Out`: gradually zooms out over time.
-- `Zoom In & Out (Beat Sync)`: alternates in/out on each detected beat.
-  - Best used after `Analyze Beats`.
-- `Zoom In & Out (Loop)`: smooth loop by elapsed time.
-  - Smooth asymmetric cycle (roughly in 4s + out 5s).
-  - If beat data exists, strength changes subtly by song energy.
-- `Zoom Sine Smooth (tmix optional)`: sine-based smooth zoom with optional frame blend.
-  - Saturation boost removed.
-  - Use `Motion blur strength` to control tmix (0.00 = off).
+## Beginner Step-by-Step
+1. `Verify FFmpeg/ONNX`.
+2. Open **Reframe Workspace**.
+3. `Select Source Video`.
+4. `Select Target Face Folder` (folder should contain only the target person).
+5. Adjust tracking sliders (start from defaults).
+6. `Export Reframed Video`.
+7. `Send Reframed Video To Effects`.
+8. In Effects workspace, choose zoom mode and slider values.
+9. (Optional) `Analyze Beats`.
+10. Set output path / preset / encoder.
+11. `Export Final`.
+12. Check output folder:
+   - video file
+   - `.json` log
+   - `.filter_script.txt`
 
-## Slider Behavior (Important)
-All sliders range from `0.00` to `1.00`.
+## Slider Meaning (Quick)
+- Increase `Face tracking strength`: denser/faster tracking updates.
+- Increase `Identity threshold`: stricter person matching (too high may miss frames).
+- Increase `Stability`: smoother camera path (less jitter, slower reaction).
+- Increase `Zoom strength`: stronger zoom effect.
+- Increase `Bounce strength`: larger beat bounce.
+- Increase `Beat sensitivity`: more beat points detected.
+- Increase `Motion blur strength`: stronger blend blur.
 
-### Zoom strength
-- Increase: stronger zoom motion.
-- Decrease: softer zoom motion.
+## Required Large Model Files (NOT pushed to Git)
+These ONNX files are intentionally not committed because GitHub has file-size limits (100MB/file).
+Place files under:
 
-### Bounce strength
-- Increase: bigger pulse on beats.
-- Decrease: gentler bounce.
+- `src-tauri/resources/models/`
 
-### Beat sensitivity
-- Increase: detects more beat points.
-- Decrease: detects only stronger peaks.
+### A) Face detector
+- **Download source**:
+  - UltraFace ONNX (`version-RFB-320*.onnx`)
+  - [https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/tree/master/models/onnx](https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/tree/master/models/onnx)
+- **Original filename used**: `version-RFB-320-int8.onnx`
+- **Local app name** (required by app): `face_detector.onnx`
+- In this repo setup, `face_detector.onnx` is a renamed copy of `version-RFB-320-int8.onnx`.
 
-### Motion blur strength
-- `0.00`: no tmix blur.
-- `0.01 - 0.33`: light blur.
-- `0.34 - 0.66`: medium blur.
-- `0.67 - 1.00`: stronger blur.
+### B) Face embedding model (ArcFace)
+- **Download source**:
+  - ONNX Model Zoo ArcFace
+  - [https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface](https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface)
+- **Original filename used**: `arcfaceresnet100-8.onnx`
+- **Local app name** (required by app): `arcface.onnx`
+- In this repo setup, `arcface.onnx` is a renamed copy of `arcfaceresnet100-8.onnx`.
 
-![Effects Sliders](docs/screenshots/04_effects_sliders.png)
+## Why push skipped large files
+- `.onnx` files are excluded in `.gitignore`.
+- Reason: keep repository lightweight and avoid GitHub large-file push errors.
 
-## Step-by-Step (Beginner Friendly)
-1. Launch app.
-2. Click `Verify FFmpeg`.
-3. Click `Select & Open Video` and choose source.
-4. Confirm `Output path` auto-filled.
-5. Set `Zoom mode` and sliders.
-6. Click `Apply Effects`.
-7. If using `Zoom In & Out (Beat Sync)`, click `Analyze Beats`.
-8. (Optional) Click `Render Preview`.
-9. Choose `Preset` and `Encoder`.
-10. Click `Export Final`.
-11. Check generated files in output folder:
-   - exported video `.mp4`
-   - export log `.json`
-   - filter script `.filter_script.txt`
-
-## UI and Buttons
-- `Select & Open Video`: Open file picker and load selected video.
-- `Verify FFmpeg`: Checks ffmpeg/ffprobe path + version.
-- `Apply Effects`: Saves slider and mode settings.
-- `Analyze Beats`: Runs beat detection from input audio.
-- `Render Preview`: Low-resolution quick render.
-- `Export Final`: Final export using selected preset/encoder.
-
-Right panel:
-- `Status` on top (progress + ETA).
-- `Project` JSON below.
-
-
-## Reframe Workspace (Current)
-- Separate workspace page (`reframe.html`) to avoid mixing with Effects UI.
-- `Select Source Video` for horizontal source clip.
-- `Select Target Face Image` for target person reference.
-- `Face tracking strength` slider (`0.00-1.00`, default `0.65`).
-- `Render Reframe Preview` / `Export Reframed Video`.
-- `Send Reframed Video To Effects` sends output path back to main workspace.
-
-### Reframe Tracking Logic (Current)
-- First tries detector-based face tracking via FFmpeg `facedetect` metadata parsing.
-- If detector path is unavailable/insufficient, falls back to template matching with selected face image.
-- Tracking strength controls sampling FPS, analysis resolution, confidence gate, smoothing, and track-point density.
-- Output remains `1080x1920` (or `540x960` preview) and uses selected encoder.
 ## Development
 ```powershell
 npm install
 npm.cmd run tauri dev
 ```
-
-## Notes
-- Screenshot naming guide: `docs/screenshots/README.md`
-- v1 focuses on a reliable single-clip flow.
-
