@@ -14,19 +14,24 @@
 
       <div class="row">
         <button id="backToEffectsBtn" class="secondary">Back To Effects Workspace</button>
-        <button id="verifyBtn" class="secondary">Verify FFmpeg</button>
+        <button id="verifyBtn" class="secondary">Verify FFmpeg/ONNX</button>
       </div>
 
       <label>Source video path</label>
       <input id="sourceVideoPath" placeholder="C:\\videos\\source_16x9.mp4" readonly />
       <button id="openSourceBtn">Select Source Video</button>
 
-      <label>Target face image path</label>
-      <input id="targetFacePath" placeholder="C:\\images\\target_face.jpg" readonly />
-      <button id="pickTargetFaceBtn" class="secondary">Select Target Face Image</button>
+      <label>Target face folder path</label>
+      <input id="targetFacePath" placeholder="C:\\images\\target_faces\\" readonly />
+      <button id="pickTargetFaceBtn" class="secondary">Select Target Face Folder</button>
 
-      <label>Face tracking strength <span id="trackingStrengthValue">0.65</span></label>
-      <input id="trackingStrength" type="range" min="0" max="1" step="0.01" value="0.65" />
+      <label>Face tracking strength <span id="trackingStrengthValue">0.72</span></label>
+      <input id="trackingStrength" type="range" min="0" max="1" step="0.01" value="0.72" />
+      <label>Identity threshold <span id="identityThresholdValue">0.58</span></label>
+      <input id="identityThreshold" type="range" min="0" max="1" step="0.01" value="0.58" />
+
+      <label>Stability <span id="stabilityValue">0.68</span></label>
+      <input id="stability" type="range" min="0" max="1" step="0.01" value="0.68" />
       <label>Reframe output path</label>
       <input id="reframeOutputPath" placeholder="C:\\videos\\source_reframed_yymmddhhmmss.mp4" />
 
@@ -60,8 +65,13 @@
     </section>
   </main>
 
-  <script type="module" src="./reframe.js?v=20260308-4"></script>
+  <script type="module" src="./reframe.js?v=20260309-1"></script>
 </body>
 </html>
+
+
+
+
+
 
 

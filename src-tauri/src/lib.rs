@@ -13,7 +13,7 @@ use core::{
 };
 use media::{
     build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points,
-    ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, tool_version_line,
+    ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, tool_version_line, verify_onnx_assets,
 };
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -138,10 +138,22 @@ pub struct ReframeRenderRequest {
     pub encoder: Option<VideoEncoder>,
     #[serde(default = "default_tracking_strength")]
     pub tracking_strength: f64,
+    #[serde(default = "default_identity_threshold")]
+    pub identity_threshold: f64,
+    #[serde(default = "default_stability")]
+    pub stability: f64,
 }
 
 fn default_tracking_strength() -> f64 {
-    0.65
+    0.72
+}
+
+fn default_identity_threshold() -> f64 {
+    0.58
+}
+
+fn default_stability() -> f64 {
+    0.68
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +206,12 @@ fn pick_image_file() -> Result<Option<String>, String> {
         .add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"])
         .pick_file();
 
+    Ok(picked.map(|p| p.display().to_string()))
+}
+
+#[tauri::command]
+fn pick_folder() -> Result<Option<String>, String> {
+    let picked = FileDialog::new().pick_folder();
     Ok(picked.map(|p| p.display().to_string()))
 }
 
@@ -459,6 +477,8 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
 
     let mut track_points = Vec::new();
     let tracking_strength = request.tracking_strength.clamp(0.0, 1.0);
+    let identity_threshold = request.identity_threshold.clamp(0.0, 1.0);
+    let stability = request.stability.clamp(0.0, 1.0);
     if let Some(face_path_raw) = request.target_face_path.as_ref() {
         let face_path_trim = face_path_raw.trim();
         if !face_path_trim.is_empty() {
@@ -471,6 +491,8 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                     info.width,
                     info.height,
                     tracking_strength,
+                    identity_threshold,
+                    stability,
                 )
                 .map_err(|e| format!("face tracking analysis failed: {e:#}"))?;
             }
@@ -487,7 +509,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
         message: if track_points.is_empty() {
             "Queued (center reframe)".to_string()
         } else {
-            format!("Queued (face track points: {}, strength={:.2})", track_points.len(), tracking_strength)
+            format!("Queued (face track points: {}, strength={:.2}, id={:.2}, stab={:.2})", track_points.len(), tracking_strength, identity_threshold, stability)
         },
         output_path: None,
     }));
@@ -507,7 +529,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                 s.message = if track_points.is_empty() {
                     "Rendering started (center reframe)".to_string()
                 } else {
-                    format!("Rendering started (face tracking, points={}, strength={:.2})", track_points.len(), tracking_strength)
+                    format!("Rendering started (face tracking, points={}, strength={:.2}, id={:.2}, stab={:.2})", track_points.len(), tracking_strength, identity_threshold, stability)
                 };
             }
         }
@@ -542,7 +564,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                     s.message = if track_points.is_empty() {
                         "Reframe completed (center)".to_string()
                     } else {
-                        format!("Reframe completed (face tracked, points={}, strength={:.2})", track_points.len(), tracking_strength)
+                        format!("Reframe completed (face tracked, points={}, strength={:.2}, id={:.2}, stab={:.2})", track_points.len(), tracking_strength, identity_threshold, stability)
                     };
                     s.output_path = Some(output_path.clone());
                     final_message = s.message.clone();
@@ -615,6 +637,11 @@ fn verify_runtime_tools() -> Result<Vec<String>, String> {
     ])
 }
 
+
+#[tauri::command]
+fn verify_onnx_runtime_assets() -> Result<Vec<String>, String> {
+    Ok(verify_onnx_assets())
+}
 
 #[tauri::command]
 fn get_encoder_options() -> Result<Vec<String>, String> {
@@ -764,6 +791,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pick_video_file,
             pick_image_file,
+            pick_folder,
             open_video,
             analyze_beats,
             set_effects,
@@ -772,6 +800,7 @@ pub fn run() {
             render_reframe,
             get_render_status,
             verify_runtime_tools,
+            verify_onnx_runtime_assets,
             get_encoder_options
         ])
         .run(tauri::generate_context!())
@@ -838,6 +867,15 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
+
+
+
+
+
 
 
 

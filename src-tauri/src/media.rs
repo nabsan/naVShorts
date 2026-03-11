@@ -66,6 +66,253 @@ pub fn detect_hardware_encoders(ffmpeg_path: &Path) -> Result<Vec<String>> {
     Ok(list)
 }
 
+
+
+pub fn verify_onnx_assets() -> Vec<String> {
+    let mut out = Vec::new();
+
+    let runtime = find_onnx_runtime_dll();
+    match runtime {
+        Some(p) => out.push(format!("onnxruntime_dll=OK:{}", p.display())),
+        None => out.push("onnxruntime_dll=MISSING".to_string()),
+    }
+
+    let model_dir = find_model_dir();
+    match &model_dir {
+        Some(d) => out.push(format!("onnx_model_dir=OK:{}", d.display())),
+        None => out.push("onnx_model_dir=MISSING".to_string()),
+    }
+
+    if let Some(s) = find_identity_track_script() {
+        out.push(format!("identity_track_script=OK:{}", s.display()));
+    } else {
+        out.push("identity_track_script=MISSING".to_string());
+    }
+
+    out.push(verify_python_identity_stack());
+
+    let detector_name = "face_detector.onnx";
+    let arcface_name = "arcface.onnx";
+
+    if let Some(d) = model_dir {
+        let detector = d.join(detector_name);
+        let arcface = d.join(arcface_name);
+
+        out.push(format!(
+            "onnx_face_detector={}",
+            if detector.exists() {
+                format!("OK:{}", detector.display())
+            } else {
+                format!("MISSING:{}", detector.display())
+            }
+        ));
+
+        out.push(format!(
+            "onnx_arcface={}",
+            if arcface.exists() {
+                format!("OK:{}", arcface.display())
+            } else {
+                format!("MISSING:{}", arcface.display())
+            }
+        ));
+    }
+
+    out
+}
+
+fn find_onnx_runtime_dll() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(v) = env::var("ONNXRUNTIME_DLL_PATH") {
+        if !v.trim().is_empty() {
+            candidates.push(PathBuf::from(v));
+        }
+    }
+
+    candidates.push(PathBuf::from(r"C:\Windows\System32\onnxruntime.dll"));
+    candidates.push(PathBuf::from(r"C:\Windows\SysWOW64\onnxruntime.dll"));
+
+    for p in candidates {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn find_model_dir() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(exe) = env::current_exe() {
+        if let Some(base) = exe.parent() {
+            candidates.push(base.join("resources").join("models"));
+        }
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("resources").join("models"));
+        candidates.push(cwd.join("src-tauri").join("resources").join("models"));
+    }
+
+    for p in candidates {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Deserialize)]
+struct IdentityTrackPointRaw {
+    time_sec: f64,
+    center_x_ratio: f64,
+    similarity: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdentityTrackOutput {
+    points: Vec<IdentityTrackPointRaw>,
+    count: Option<usize>,
+}
+
+
+fn verify_python_identity_stack() -> String {
+    let script = "import importlib.util;mods=['onnxruntime','cv2','numpy'];print(','.join([m+':'+('OK' if importlib.util.find_spec(m) else 'MISSING') for m in mods]))";
+    let out = Command::new("python")
+        .arg("-c")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { "python_identity_stack=UNKNOWN".to_string() } else { format!("python_identity_stack={s}") }
+        }
+        Ok(o) => format!("python_identity_stack=ERR:{}", String::from_utf8_lossy(&o.stderr).trim()),
+        Err(e) => format!("python_identity_stack=ERR:{e}"),
+    }
+}
+fn find_identity_track_script() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("scripts").join("identity_track.py"));
+        candidates.push(cwd.join("scripts").join("identity_track.py"));
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        if let Some(base) = exe.parent() {
+            candidates.push(base.join("resources").join("scripts").join("identity_track.py"));
+        }
+    }
+
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn track_identity_with_onnx_python(
+    input_video: &Path,
+    target_face_ref: &Path,
+    sample_width: u32,
+    sample_fps: f64,
+    sim_threshold: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    let script = find_identity_track_script()
+        .ok_or_else(|| anyhow!("identity_track.py not found"))?;
+
+    let model_dir = find_model_dir().ok_or_else(|| anyhow!("onnx model dir not found"))?;
+    let detector = model_dir.join("face_detector.onnx");
+    let arcface = model_dir.join("arcface.onnx");
+
+    if !detector.exists() || !arcface.exists() {
+        return Err(anyhow!(
+            "onnx models missing (detector={}, arcface={})",
+            detector.display(),
+            arcface.display()
+        ));
+    }
+
+    let mut command = Command::new("python");
+    command
+        .arg(script)
+        .arg("--video")
+        .arg(input_video)
+        .arg("--detector")
+        .arg(detector)
+        .arg("--arcface")
+        .arg(arcface)
+        .arg("--sample-fps")
+        .arg(format!("{sample_fps:.4}"))
+        .arg("--sample-width")
+        .arg(sample_width.to_string())
+        .arg("--sim-threshold")
+        .arg(format!("{sim_threshold:.4}"));
+
+    if target_face_ref.is_dir() {
+        command.arg("--target-dir").arg(target_face_ref);
+    } else {
+        command.arg("--target").arg(target_face_ref);
+    }
+
+    let output = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to start identity_track.py")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "identity_track.py failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let parsed: IdentityTrackOutput = serde_json::from_slice(&output.stdout)
+        .context("identity_track.py returned invalid json")?;
+
+    let mut out = Vec::with_capacity(parsed.points.len());
+    for p in parsed.points {
+        out.push(ReframeTrackPoint {
+            time_sec: p.time_sec,
+            center_x_ratio: p.center_x_ratio.clamp(0.1, 0.9),
+        });
+    }
+    Ok(out)
+}
+
+fn is_face_image_file(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => {
+            let e = ext.to_ascii_lowercase();
+            matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp" | "bmp")
+        }
+        None => false,
+    }
+}
+
+fn collect_target_face_images(target_face_ref: &Path) -> Vec<PathBuf> {
+    if target_face_ref.is_file() {
+        return vec![target_face_ref.to_path_buf()];
+    }
+    if !target_face_ref.is_dir() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(target_face_ref) {
+        for ent in rd.flatten() {
+            let p = ent.path();
+            if p.is_file() && is_face_image_file(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 pub fn tool_version_line(binary: &Path) -> Result<String> {
     let out = Command::new(binary)
         .arg("-version")
@@ -308,27 +555,51 @@ pub fn build_reframe_filtergraph(
 pub fn estimate_face_track_points(
     ffmpeg_path: &Path,
     input_video: &Path,
-    target_face_image: &Path,
+    target_face_ref: &Path,
     source_width: u32,
     source_height: u32,
     tracking_strength: f64,
+    identity_threshold: f64,
+    stability: f64,
 ) -> Result<Vec<ReframeTrackPoint>> {
     let s = tracking_strength.clamp(0.0, 1.0);
+    let id = identity_threshold.clamp(0.0, 1.0);
+    let stab = stability.clamp(0.0, 1.0);
     let sample_width = ((320.0 + 192.0 * s).round() as u32).clamp(320, 512);
     let sample_fps = 2.0 + (4.0 * s);
-    let max_points = (64.0 + 96.0 * s).round() as usize;
-    let alpha = 0.25 + 0.45 * s;
+    let max_points = (72.0 + 96.0 * s).round() as usize;
+    // Higher stability => smoother trajectory (smaller alpha).
+    let alpha = (0.62 - 0.52 * stab).clamp(0.08, 0.75);
 
-    // Preferred path: detector-based tracking (stronger than template matching on difficult clips).
-    if let Ok(points) = detect_faces_track_points_ffmpeg(ffmpeg_path, input_video, sample_width, sample_fps) {
-        if points.len() >= 8 {
-            return Ok(compress_track_points(&points, max_points, alpha));
+    // Preferred path #1: ONNX identity tracking (face detector + ArcFace embedding).
+    // identity_threshold slider maps to cosine threshold in practical range.
+    let sim_threshold = (0.18 + 0.20 * id).clamp(0.18, 0.38);
+    if let Ok(points) = track_identity_with_onnx_python(
+        input_video,
+        target_face_ref,
+        sample_width,
+        sample_fps,
+        sim_threshold,
+    ) {
+        if points.len() >= 6 {
+            return Ok(compress_track_points(&points, max_points, alpha, stab));
         }
     }
 
-    // Fallback path: target-image template matching.
+    // Preferred path #2: detector-based tracking (stronger than template matching on difficult clips).
+    if let Ok(points) = detect_faces_track_points_ffmpeg(ffmpeg_path, input_video, sample_width, sample_fps) {
+        if points.len() >= 8 {
+            return Ok(compress_track_points(&points, max_points, alpha, stab));
+        }
+    }
+
+    // Fallback path: template matching using the first face image.
+    let template_input = collect_target_face_images(target_face_ref)
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no target face image found (need jpg/png/webp/bmp)"))?;
     let template_size = ((source_width as f64 / 72.0).round() as u32).clamp(32, 64);
-    let target = load_template_gray(ffmpeg_path, target_face_image, template_size)?;
+    let target = load_template_gray(ffmpeg_path, &template_input, template_size)?;
     let sample_height = scaled_even_height(source_width, source_height, sample_width);
     let video_raw = sample_video_gray(ffmpeg_path, input_video, sample_fps, sample_width)?;
     let frame_size = (sample_width * sample_height) as usize;
@@ -361,7 +632,7 @@ pub fn estimate_face_track_points(
         });
     }
 
-    Ok(compress_track_points(&points, max_points, alpha))
+    Ok(compress_track_points(&points, max_points, alpha, stab))
 }
 
 pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
@@ -910,27 +1181,94 @@ fn template_match_best(
         }
         y += stride;
     }
-
     let confidence = (1.0 - best_score).clamp(0.0, 1.0);
     Some((best_x, best_y, confidence))
 }
 
-fn compress_track_points(points: &[ReframeTrackPoint], max_points: usize, alpha: f64) -> Vec<ReframeTrackPoint> {
-    if points.len() <= max_points {
-        return smooth_track_points(points, alpha);
+fn compress_track_points(
+    points: &[ReframeTrackPoint],
+    max_points: usize,
+    alpha: f64,
+    stability: f64,
+) -> Vec<ReframeTrackPoint> {
+    if points.is_empty() {
+        return Vec::new();
     }
 
-    let step = (points.len() as f64 / max_points as f64).ceil() as usize;
-    let mut out = Vec::with_capacity(max_points + 1);
-    for i in (0..points.len()).step_by(step.max(1)) {
-        out.push(points[i].clone());
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|a, b| a.time_sec.partial_cmp(&b.time_sec).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Velocity clamp first: prevents sudden jumps that appear as odd inserted frames.
+    let max_speed = (0.10 + 0.55 * (1.0 - stability.clamp(0.0, 1.0))).clamp(0.10, 0.65);
+    let mut clamped = Vec::with_capacity(sorted.len());
+    clamped.push(sorted[0].clone());
+    for p in sorted.iter().skip(1) {
+        let prev = clamped.last().expect("has prev");
+        let dt = (p.time_sec - prev.time_sec).max(1.0 / 120.0);
+        let max_delta = max_speed * dt;
+        let delta = p.center_x_ratio - prev.center_x_ratio;
+        let x = if delta.abs() > max_delta {
+            prev.center_x_ratio + delta.signum() * max_delta
+        } else {
+            p.center_x_ratio
+        }
+        .clamp(0.0, 1.0);
+
+        clamped.push(ReframeTrackPoint {
+            time_sec: p.time_sec,
+            center_x_ratio: x,
+        });
     }
-    if let Some(last) = points.last() {
+
+    // Resample to fixed time grid for smoother expression and fewer visual glitches.
+    let start_t = clamped.first().map(|p| p.time_sec).unwrap_or(0.0);
+    let end_t = clamped.last().map(|p| p.time_sec).unwrap_or(start_t);
+    let step = 1.0 / 12.0;
+
+    let mut resampled = Vec::new();
+    let mut idx = 0usize;
+    let mut t = start_t;
+    while t <= end_t + 1e-6 {
+        while idx + 1 < clamped.len() && clamped[idx + 1].time_sec < t {
+            idx += 1;
+        }
+
+        let x = if idx + 1 < clamped.len() {
+            let a = &clamped[idx];
+            let b = &clamped[idx + 1];
+            let dt = (b.time_sec - a.time_sec).max(1e-6);
+            let u = ((t - a.time_sec) / dt).clamp(0.0, 1.0);
+            a.center_x_ratio + (b.center_x_ratio - a.center_x_ratio) * u
+        } else {
+            clamped[idx].center_x_ratio
+        };
+
+        resampled.push(ReframeTrackPoint {
+            time_sec: t,
+            center_x_ratio: x.clamp(0.0, 1.0),
+        });
+
+        t += step;
+    }
+
+    let smoothed = smooth_track_points(&resampled, alpha);
+
+    if smoothed.len() <= max_points {
+        return smoothed;
+    }
+
+    let step_down = (smoothed.len() as f64 / max_points as f64).ceil() as usize;
+    let mut out = Vec::with_capacity(max_points + 1);
+    for i in (0..smoothed.len()).step_by(step_down.max(1)) {
+        out.push(smoothed[i].clone());
+    }
+    if let Some(last) = smoothed.last() {
         if out.last().map(|p| p.time_sec) != Some(last.time_sec) {
             out.push(last.clone());
         }
     }
-    smooth_track_points(&out, alpha)
+
+    out
 }
 
 fn smooth_track_points(points: &[ReframeTrackPoint], alpha: f64) -> Vec<ReframeTrackPoint> {
@@ -1011,6 +1349,24 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

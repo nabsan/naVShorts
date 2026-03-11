@@ -27,6 +27,10 @@ const reframeOutputPath = $("reframeOutputPath");
 const encoder = $("encoder");
 const trackingStrength = $("trackingStrength");
 const trackingStrengthValue = $("trackingStrengthValue");
+const identityThreshold = $("identityThreshold");
+const identityThresholdValue = $("identityThresholdValue");
+const stability = $("stability");
+const stabilityValue = $("stabilityValue");
 
 const projectInfo = $("projectInfo");
 const statusInfo = $("statusInfo");
@@ -92,8 +96,9 @@ async function refreshProject() {
 
 async function verifyTools() {
   try {
-    const result = await invoke("verify_runtime_tools");
-    printStatus(result);
+    const ff = await invoke("verify_runtime_tools");
+    const onnx = await invoke("verify_onnx_runtime_assets");
+    printStatus({ ffmpeg: ff, onnx });
   } catch (e) {
     printStatus(String(e));
   }
@@ -141,7 +146,9 @@ async function startReframeRender(preview) {
     const input = sourceVideoPath.value.trim();
     const out = reframeOutputPath.value.trim();
     const face = targetFacePath.value.trim();
-    const tracking = Number(trackingStrength?.value ?? 0.65);
+    const tracking = Number(trackingStrength?.value ?? 0.72);
+    const idThr = Number(identityThreshold?.value ?? 0.58);
+    const stab = Number(stability?.value ?? 0.68);
 
     if (!input) {
       printStatus("Source video path is empty.");
@@ -159,7 +166,9 @@ async function startReframeRender(preview) {
         targetFacePath: face || null,
         preview,
         encoder: encoder.value,
-        trackingStrength: Number.isFinite(tracking) ? tracking : 0.65,
+        trackingStrength: Number.isFinite(tracking) ? tracking : 0.72,
+        identityThreshold: Number.isFinite(idThr) ? idThr : 0.58,
+        stability: Number.isFinite(stab) ? stab : 0.68,
       },
     });
 
@@ -167,33 +176,38 @@ async function startReframeRender(preview) {
     if (status && status.state === "completed") {
       lastOutput = out;
       const faceRef = face || "(none)";
-      printStatus(`Reframe complete. Face reference: ${faceRef} | tracking strength: ${tracking.toFixed(2)}`);
+      printStatus(`Reframe complete. Face reference: ${faceRef} | tracking=${tracking.toFixed(2)} id=${idThr.toFixed(2)} stability=${stab.toFixed(2)}`);
     }
   } catch (e) {
     printStatus(String(e));
   }
 }
 
-if (trackingStrength && trackingStrengthValue) {
-  const syncTrackingText = () => {
-    trackingStrengthValue.textContent = Number(trackingStrength.value).toFixed(2);
+function bindSlider(inputEl, labelEl) {
+  if (!inputEl || !labelEl) return;
+  const sync = () => {
+    labelEl.textContent = Number(inputEl.value).toFixed(2);
   };
-  trackingStrength.addEventListener("input", syncTrackingText);
-  syncTrackingText();
+  inputEl.addEventListener("input", sync);
+  sync();
 }
+
+bindSlider(trackingStrength, trackingStrengthValue);
+bindSlider(identityThreshold, identityThresholdValue);
+bindSlider(stability, stabilityValue);
 
 $("verifyBtn").addEventListener("click", verifyTools);
 
 if (pickTargetFaceBtn) {
   pickTargetFaceBtn.addEventListener("click", async () => {
     try {
-      const picked = await invoke("pick_image_file");
+      const picked = await invoke("pick_folder");
       if (!picked) {
-        printStatus("Face image selection cancelled.");
+        printStatus("Face folder selection cancelled.");
         return;
       }
       targetFacePath.value = picked;
-      printStatus("Target face image selected.");
+      printStatus("Target face folder selected.");
     } catch (e) {
       printStatus(String(e));
     }
@@ -242,5 +256,8 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
+
+
+
 
 

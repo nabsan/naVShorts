@@ -2,3 +2,5 @@
 /src-tauri/target
 /src-tauri/gen
 *.log
+/src-tauri/resources/models/*.onnx
+/src-tauri/resources/models/**/*.onnx
