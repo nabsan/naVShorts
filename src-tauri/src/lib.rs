@@ -378,6 +378,9 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
             Path::new(&input_video),
             Path::new(&output_path),
             &filtergraph,
+            out_width,
+            out_height,
+            !request.preview,
             frame_rate,
             info.duration_sec,
             chosen_encoder.clone(),
@@ -473,7 +476,14 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
     let chosen_encoder = resolve_encoder(requested_encoder.clone(), &available_hw)?;
 
     let frame_rate = if request.preview { 24 } else { 30 };
-    let (out_width, out_height) = if request.preview { (540, 960) } else { (1080, 1920) };
+    let high_res_source = info.width >= 3000 || info.height >= 1700;
+    let (out_width, out_height) = if request.preview {
+        (540, 960)
+    } else if high_res_source {
+        (2160, 3840)
+    } else {
+        (1080, 1920)
+    };
 
     let mut track_points = Vec::new();
     let tracking_strength = request.tracking_strength.clamp(0.0, 1.0);
@@ -507,9 +517,9 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
         state: RenderState::Queued,
         progress: 0.0,
         message: if track_points.is_empty() {
-            "Queued (center reframe)".to_string()
+            format!("Queued (center reframe, {}x{})", out_width, out_height)
         } else {
-            format!("Queued (face track points: {}, strength={:.2}, id={:.2}, stab={:.2})", track_points.len(), tracking_strength, identity_threshold, stability)
+            format!("Queued ({}x{}, face track points: {}, strength={:.2}, id={:.2}, stab={:.2})", out_width, out_height, track_points.len(), tracking_strength, identity_threshold, stability)
         },
         output_path: None,
     }));
@@ -527,9 +537,9 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
             if let Ok(mut s) = status.lock() {
                 s.state = RenderState::Running;
                 s.message = if track_points.is_empty() {
-                    "Rendering started (center reframe)".to_string()
+                    format!("Rendering started (center reframe, {}x{})", out_width, out_height)
                 } else {
-                    format!("Rendering started (face tracking, points={}, strength={:.2}, id={:.2}, stab={:.2})", track_points.len(), tracking_strength, identity_threshold, stability)
+                    format!("Rendering started ({}x{}, face tracking, points={}, strength={:.2}, id={:.2}, stab={:.2})", out_width, out_height, track_points.len(), tracking_strength, identity_threshold, stability)
                 };
             }
         }
@@ -539,6 +549,9 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
             Path::new(&input_video),
             Path::new(&output_path),
             &filtergraph,
+            out_width,
+            out_height,
+            !request.preview,
             frame_rate,
             info.duration_sec,
             chosen_encoder.clone(),
@@ -562,9 +575,9 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                     s.state = RenderState::Completed;
                     s.progress = 1.0;
                     s.message = if track_points.is_empty() {
-                        "Reframe completed (center)".to_string()
+                        format!("Reframe completed (center, {}x{})", out_width, out_height)
                     } else {
-                        format!("Reframe completed (face tracked, points={}, strength={:.2}, id={:.2}, stab={:.2})", track_points.len(), tracking_strength, identity_threshold, stability)
+                        format!("Reframe completed ({}x{}, face tracked, points={}, strength={:.2}, id={:.2}, stab={:.2})", out_width, out_height, track_points.len(), tracking_strength, identity_threshold, stability)
                     };
                     s.output_path = Some(output_path.clone());
                     final_message = s.message.clone();
@@ -867,6 +880,10 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
 
 
 

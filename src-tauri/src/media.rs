@@ -640,6 +640,9 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
     input: &Path,
     output: &Path,
     filtergraph: &str,
+    output_width: u32,
+    output_height: u32,
+    high_quality: bool,
     frame_rate: u32,
     duration_sec: f64,
     encoder: VideoEncoder,
@@ -669,15 +672,18 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
         frame_rate.to_string(),
     ];
 
+    let ultra_res = output_width >= 2000 || output_height >= 3000;
+    let hq = high_quality || ultra_res;
+
     match encoder {
         VideoEncoder::Cpu | VideoEncoder::Auto => {
             args.extend([
                 "-c:v".to_string(),
                 "libx264".to_string(),
                 "-preset".to_string(),
-                "medium".to_string(),
+                if hq { "slow".to_string() } else { "medium".to_string() },
                 "-crf".to_string(),
-                "22".to_string(),
+                if hq { "18".to_string() } else { "22".to_string() },
             ]);
         }
         VideoEncoder::Nvidia => {
@@ -685,9 +691,9 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
                 "-c:v".to_string(),
                 "h264_nvenc".to_string(),
                 "-preset".to_string(),
-                "p5".to_string(),
+                if hq { "p6".to_string() } else { "p5".to_string() },
                 "-cq".to_string(),
-                "23".to_string(),
+                if hq { "19".to_string() } else { "23".to_string() },
                 "-b:v".to_string(),
                 "0".to_string(),
             ]);
@@ -697,7 +703,7 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
                 "-c:v".to_string(),
                 "h264_qsv".to_string(),
                 "-global_quality".to_string(),
-                "23".to_string(),
+                if hq { "19".to_string() } else { "23".to_string() },
             ]);
         }
         VideoEncoder::Amd => {
@@ -709,9 +715,9 @@ pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
                 "-rc".to_string(),
                 "cqp".to_string(),
                 "-qp_i".to_string(),
-                "23".to_string(),
+                if hq { "19".to_string() } else { "23".to_string() },
                 "-qp_p".to_string(),
-                "23".to_string(),
+                if hq { "19".to_string() } else { "23".to_string() },
             ]);
         }
     }
@@ -1349,6 +1355,8 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
 
 
 
