@@ -1,4 +1,4 @@
-﻿# naVShorts (Windows)
+# naVShorts (Windows)
 
 Windows desktop app for vertical social videos.
 Built with **Tauri + Rust + FFmpeg**.
@@ -108,3 +108,14 @@ Place files under:
 npm install
 npm.cmd run tauri dev
 ```
+
+
+## UI Updates (Current)
+- Top tabs are always visible: 1. Reframe and 2. Effects.
+- App starts on Reframe tab by default.
+- App branding now shows 
+aVShorts name + custom icon.
+- Last-used slider/select values are remembered and restored on next launch:
+  - Effects: zoom mode, zoom strength, ounce strength, eat sensitivity, motion blur strength, preset, ideo encoder`r
+  - Reframe: ace tracking strength, identity threshold, stability, ideo encoder`r
+- Status area uses fixed size with internal scroll to prevent layout break on long text.

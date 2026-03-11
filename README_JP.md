@@ -1,4 +1,4 @@
-﻿# naVShorts (Windows)
+# naVShorts (Windows)
 
 Windows向けの縦動画作成アプリです。  
 技術スタック: **Tauri + Rust + FFmpeg**
@@ -105,3 +105,14 @@ Windows向けの縦動画作成アプリです。
 npm install
 npm.cmd run tauri dev
 ```
+
+
+## UI更新点（現行）
+- 画面上部に常時タブ表示: 1. Reframe / 2. Effects`r
+- 起動時は Reframe タブを最初に表示
+- 
+aVShorts の名称とカスタムアイコンを表示
+- 最後に使ったスライダー/選択値を次回起動時に復元:
+  - Effects: zoom mode, zoom strength, ounce strength, eat sensitivity, motion blur strength, preset, ideo encoder`r
+  - Reframe: ace tracking strength, identity threshold, stability, ideo encoder`r
+- Status欄は固定サイズ+内部スクロールにして、長文でもレイアウト崩れを抑制

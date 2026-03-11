@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Shorts Reels Maker",
+  "productName": "naVShorts",
   "version": "0.1.0",
   "identifier": "com.example.shortsreelsmaker",
   "build": {
@@ -10,7 +10,8 @@
     "windows": [
       {
         "label": "main",
-        "title": "Shorts/Reels Maker",
+        "title": "naVShorts",
+        "url": "reframe.html",
         "width": 1200,
         "height": 860,
         "resizable": true,
@@ -25,7 +26,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.ico"],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "windows": {
       "wix": {
         "language": "en-US"

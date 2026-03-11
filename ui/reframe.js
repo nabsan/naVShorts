@@ -1,24 +1,20 @@
 ﻿function resolveInvoke() {
   const modern = window.__TAURI__?.core?.invoke;
-  if (typeof modern === "function") {
-    return modern;
-  }
+  if (typeof modern === "function") return modern;
 
   const legacy = window.__TAURI__?.tauri?.invoke;
-  if (typeof legacy === "function") {
-    return legacy;
-  }
+  if (typeof legacy === "function") return legacy;
 
   const internal = window.__TAURI_INTERNALS__?.invoke;
-  if (typeof internal === "function") {
-    return (cmd, payload) => internal(cmd, payload);
-  }
+  if (typeof internal === "function") return (cmd, payload) => internal(cmd, payload);
 
   return null;
 }
 
 const tauriInvoke = resolveInvoke();
 const $ = (id) => document.getElementById(id);
+
+const SETTINGS_KEY = "naVShorts.reframe.v1";
 
 const sourceVideoPath = $("sourceVideoPath");
 const targetFacePath = $("targetFacePath");
@@ -82,6 +78,43 @@ function setProgress(progress, etaText) {
   etaInfo.textContent = etaText;
 }
 
+function bindSlider(inputEl, labelEl) {
+  if (!inputEl || !labelEl) return;
+  const sync = () => {
+    labelEl.textContent = Number(inputEl.value).toFixed(2);
+  };
+  inputEl.addEventListener("input", () => {
+    sync();
+    saveSettings();
+  });
+  inputEl.addEventListener("change", saveSettings);
+  sync();
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (typeof s.trackingStrength === "number") trackingStrength.value = String(s.trackingStrength);
+    if (typeof s.identityThreshold === "number") identityThreshold.value = String(s.identityThreshold);
+    if (typeof s.stability === "number") stability.value = String(s.stability);
+    if (typeof s.encoder === "string") encoder.value = s.encoder;
+  } catch {
+    // ignore broken local settings
+  }
+}
+
+function saveSettings() {
+  const payload = {
+    trackingStrength: Number(trackingStrength.value),
+    identityThreshold: Number(identityThreshold.value),
+    stability: Number(stability.value),
+    encoder: encoder.value,
+  };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
+}
+
 async function invoke(cmd, payload) {
   if (!tauriInvoke) {
     throw new Error("Tauri API not available");
@@ -143,6 +176,7 @@ async function trackRenderJob(jobId) {
 
 async function startReframeRender(preview) {
   try {
+    saveSettings();
     const input = sourceVideoPath.value.trim();
     const out = reframeOutputPath.value.trim();
     const face = targetFacePath.value.trim();
@@ -183,18 +217,11 @@ async function startReframeRender(preview) {
   }
 }
 
-function bindSlider(inputEl, labelEl) {
-  if (!inputEl || !labelEl) return;
-  const sync = () => {
-    labelEl.textContent = Number(inputEl.value).toFixed(2);
-  };
-  inputEl.addEventListener("input", sync);
-  sync();
-}
-
+loadSettings();
 bindSlider(trackingStrength, trackingStrengthValue);
 bindSlider(identityThreshold, identityThresholdValue);
 bindSlider(stability, stabilityValue);
+encoder.addEventListener("change", saveSettings);
 
 $("verifyBtn").addEventListener("click", verifyTools);
 
@@ -245,10 +272,6 @@ $("sendToEffectsBtn").addEventListener("click", () => {
   window.location.href = u.toString();
 });
 
-$("backToEffectsBtn").addEventListener("click", () => {
-  window.location.href = "./index.html";
-});
-
 if (!tauriInvoke) {
   printStatus("Tauri API not available");
 }
@@ -256,8 +279,3 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
-
-
-
-
-

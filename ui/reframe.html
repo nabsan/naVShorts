@@ -3,17 +3,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Shorts/Reels Maker - Reframe</title>
+  <title>naVShorts - Reframe</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="./assets/navshorts-icon-64.png" alt="naVShorts icon" class="brandIcon" />
+      <div>
+        <div class="brandName">naVShorts</div>
+        <div class="brandSub">Vertical video workflow studio</div>
+      </div>
+    </div>
+    <nav class="tabs" aria-label="Workspace tabs">
+      <a class="tab active" href="./reframe.html">1. Reframe</a>
+      <a class="tab" href="./index.html">2. Effects</a>
+    </nav>
+  </header>
+
   <main class="layout">
     <section class="panel">
       <h1>Reframe Workspace</h1>
-      <p class="sub">Step 1: Horizontal source to vertical 9:16 base export. (Face tracking UI prepared)</p>
+      <p class="sub">Step 1: Convert horizontal source into vertical 9:16 base with face tracking.</p>
 
       <div class="row">
-        <button id="backToEffectsBtn" class="secondary">Back To Effects Workspace</button>
         <button id="verifyBtn" class="secondary">Verify FFmpeg/ONNX</button>
       </div>
 
@@ -27,11 +40,13 @@
 
       <label>Face tracking strength <span id="trackingStrengthValue">0.72</span></label>
       <input id="trackingStrength" type="range" min="0" max="1" step="0.01" value="0.72" />
+
       <label>Identity threshold <span id="identityThresholdValue">0.58</span></label>
       <input id="identityThreshold" type="range" min="0" max="1" step="0.01" value="0.58" />
 
       <label>Stability <span id="stabilityValue">0.68</span></label>
       <input id="stability" type="range" min="0" max="1" step="0.01" value="0.68" />
+
       <label>Reframe output path</label>
       <input id="reframeOutputPath" placeholder="C:\\videos\\source_reframed_yymmddhhmmss.mp4" />
 
@@ -65,13 +80,6 @@
     </section>
   </main>
 
-  <script type="module" src="./reframe.js?v=20260309-1"></script>
+  <script type="module" src="./reframe.js?v=20260311-1"></script>
 </body>
 </html>
-
-
-
-
-
-
-

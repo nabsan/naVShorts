@@ -1,25 +1,20 @@
-function resolveInvoke() {
+﻿function resolveInvoke() {
   const modern = window.__TAURI__?.core?.invoke;
-  if (typeof modern === "function") {
-    return modern;
-  }
+  if (typeof modern === "function") return modern;
 
   const legacy = window.__TAURI__?.tauri?.invoke;
-  if (typeof legacy === "function") {
-    return legacy;
-  }
+  if (typeof legacy === "function") return legacy;
 
   const internal = window.__TAURI_INTERNALS__?.invoke;
-  if (typeof internal === "function") {
-    return (cmd, payload) => internal(cmd, payload);
-  }
+  if (typeof internal === "function") return (cmd, payload) => internal(cmd, payload);
 
   return null;
 }
 
 const tauriInvoke = resolveInvoke();
-
 const $ = (id) => document.getElementById(id);
+
+const SETTINGS_KEY = "naVShorts.effects.v1";
 
 const videoPath = $("videoPath");
 const outputPath = $("outputPath");
@@ -41,7 +36,6 @@ const motionBlurStrengthValue = $("motionBlurStrengthValue");
 
 const preset = $("preset");
 const encoder = $("encoder");
-const gotoReframeBtn = $("gotoReframeBtn");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -80,10 +74,10 @@ function printStatus(textOrObject) {
 }
 
 function syncSliderLabels() {
-  zoomStrengthValue.textContent = zoomStrength.value;
-  bounceStrengthValue.textContent = bounceStrength.value;
-  beatSensitivityValue.textContent = beatSensitivity.value;
-  motionBlurStrengthValue.textContent = motionBlurStrength.value;
+  zoomStrengthValue.textContent = Number(zoomStrength.value).toFixed(2);
+  bounceStrengthValue.textContent = Number(bounceStrength.value).toFixed(2);
+  beatSensitivityValue.textContent = Number(beatSensitivity.value).toFixed(2);
+  motionBlurStrengthValue.textContent = Number(motionBlurStrength.value).toFixed(2);
 }
 
 function setProgress(progress, etaText) {
@@ -91,11 +85,49 @@ function setProgress(progress, etaText) {
   etaInfo.textContent = etaText;
 }
 
-[zoomStrength, bounceStrength, beatSensitivity, motionBlurStrength].forEach((el) => {
-  el.addEventListener("input", syncSliderLabels);
-});
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (typeof s.zoomMode === "string") zoomMode.value = s.zoomMode;
+    if (typeof s.zoomStrength === "number") zoomStrength.value = String(s.zoomStrength);
+    if (typeof s.bounceStrength === "number") bounceStrength.value = String(s.bounceStrength);
+    if (typeof s.beatSensitivity === "number") beatSensitivity.value = String(s.beatSensitivity);
+    if (typeof s.motionBlurStrength === "number") motionBlurStrength.value = String(s.motionBlurStrength);
+    if (typeof s.preset === "string") preset.value = s.preset;
+    if (typeof s.encoder === "string") encoder.value = s.encoder;
+  } catch {
+    // ignore broken local settings
+  }
+}
+
+function saveSettings() {
+  const payload = {
+    zoomMode: zoomMode.value,
+    zoomStrength: Number(zoomStrength.value),
+    bounceStrength: Number(bounceStrength.value),
+    beatSensitivity: Number(beatSensitivity.value),
+    motionBlurStrength: Number(motionBlurStrength.value),
+    preset: preset.value,
+    encoder: encoder.value,
+  };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
+}
+
+loadSettings();
 syncSliderLabels();
 setProgress(0, "Idle");
+
+[zoomStrength, bounceStrength, beatSensitivity, motionBlurStrength].forEach((el) => {
+  el.addEventListener("input", () => {
+    syncSliderLabels();
+    saveSettings();
+  });
+  el.addEventListener("change", saveSettings);
+});
+
+[zoomMode, preset, encoder].forEach((el) => el.addEventListener("change", saveSettings));
 
 async function invoke(cmd, payload) {
   if (!tauriInvoke) {
@@ -143,6 +175,7 @@ $("openBtn").addEventListener("click", async () => {
 
 $("saveEffectsBtn").addEventListener("click", async () => {
   try {
+    saveSettings();
     const project = await invoke("set_effects", {
       config: {
         zoomMode: zoomMode.value,
@@ -175,11 +208,13 @@ $("analyzeBtn").addEventListener("click", async () => {
 
 async function startRender(preview) {
   try {
+    saveSettings();
     const jobId = await invoke("render", {
       request: {
         outputPath: outputPath.value.trim(),
         preset: preset.value,
         preview,
+        encoder: encoder.value,
       },
     });
 
@@ -225,15 +260,6 @@ if (!tauriInvoke) {
   printStatus("Tauri invoke bridge not found.");
 }
 
-initEncoderOptions().catch(() => {});
-
-refreshProject().catch((e) => {
-  if (!tauriInvoke) {
-    return;
-  }
-  printStatus(String(e));
-});
-
 async function initEncoderOptions() {
   try {
     const options = await invoke("get_encoder_options");
@@ -246,9 +272,14 @@ async function initEncoderOptions() {
         continue;
       }
       opt.disabled = !available.has(v);
-      if (opt.disabled) {
+      if (opt.disabled && !opt.textContent.includes("(unavailable)")) {
         opt.textContent += " (unavailable)";
       }
+    }
+
+    if (encoder.value !== "auto" && encoder.value !== "cpu" && !available.has(encoder.value)) {
+      encoder.value = "auto";
+      saveSettings();
     }
 
     if (available.has("nvidia")) {
@@ -265,15 +296,12 @@ async function initEncoderOptions() {
   }
 }
 
-
-
 async function applyIncomingReframedInput() {
   try {
     const params = new URLSearchParams(window.location.search);
     const incoming = params.get("reframed");
-    if (!incoming) {
-      return;
-    }
+    if (!incoming) return;
+
     videoPath.value = incoming;
     await invoke("open_video", { path: incoming });
     outputPath.value = buildDefaultOutputPath(incoming);
@@ -284,11 +312,9 @@ async function applyIncomingReframedInput() {
   }
 }
 
-
-if (gotoReframeBtn) {
-  gotoReframeBtn.addEventListener("click", () => {
-    window.location.assign("./reframe.html");
-  });
-}
-
+initEncoderOptions().catch(() => {});
+refreshProject().catch((e) => {
+  if (!tauriInvoke) return;
+  printStatus(String(e));
+});
 applyIncomingReframedInput().catch(() => {});

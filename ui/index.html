@@ -1,19 +1,30 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Shorts/Reels Maker</title>
+  <title>naVShorts - Effects</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="./assets/navshorts-icon-64.png" alt="naVShorts icon" class="brandIcon" />
+      <div>
+        <div class="brandName">naVShorts</div>
+        <div class="brandSub">Vertical video workflow studio</div>
+      </div>
+    </div>
+    <nav class="tabs" aria-label="Workspace tabs">
+      <a class="tab" href="./reframe.html">1. Reframe</a>
+      <a class="tab active" href="./index.html">2. Effects</a>
+    </nav>
+  </header>
+
   <main class="layout">
     <section class="panel">
-      <h1>Shorts/Reels Maker</h1>
-      <p class="sub">Single-clip 9:16 movie builder for YouTube Shorts and Instagram Reels.</p>
-      <div class="row">
-        <button id="gotoReframeBtn" class="secondary" type="button">Open Reframe Workspace</button>
-      </div>
+      <h1>Effects Workspace</h1>
+      <p class="sub">Step 2: Add zoom/beat effects and export final vertical video.</p>
 
       <label>Video file path</label>
       <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
@@ -89,9 +100,6 @@
     </section>
   </main>
 
-  <script type="module" src="./app.js?v=20260308-4"></script>
+  <script type="module" src="./app.js?v=20260311-1"></script>
 </body>
 </html>
-
-
-
