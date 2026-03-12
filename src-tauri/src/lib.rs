@@ -13,7 +13,7 @@ use core::{
 };
 use media::{
     build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points,
-    ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, tool_version_line, verify_onnx_assets,
+    ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, score_face_folder_with_onnx_python, tool_version_line, verify_onnx_assets,
 };
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -211,7 +211,12 @@ fn pick_image_file() -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn pick_folder() -> Result<Option<String>, String> {
-    let picked = FileDialog::new().pick_folder();
+    let default_dir = PathBuf::from(r"S:\tools\codex\waka_images");
+    let mut dialog = FileDialog::new();
+    if default_dir.exists() {
+        dialog = dialog.set_directory(&default_dir);
+    }
+    let picked = dialog.pick_folder();
     Ok(picked.map(|p| p.display().to_string()))
 }
 
@@ -466,61 +471,12 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
         return Err(format!("Input file does not exist: {input_video}"));
     }
 
-    let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
-    let ffprobe = ffprobe_binary().map_err(|e| format!("{e:#}"))?;
-    let info = probe_video(&ffprobe, &input_path).map_err(|e| format!("{e:#}"))?;
-
-    let ffmpeg_ver = tool_version_line(&ffmpeg).unwrap_or_else(|_| "unknown".to_string());
-    let available_hw = detect_hardware_encoders(&ffmpeg).map_err(|e| format!("{e:#}"))?;
-    let requested_encoder = request.encoder.clone().unwrap_or(VideoEncoder::Auto);
-    let chosen_encoder = resolve_encoder(requested_encoder.clone(), &available_hw)?;
-
-    let frame_rate = if request.preview { 24 } else { 30 };
-    let high_res_source = info.width >= 3000 || info.height >= 1700;
-    let (out_width, out_height) = if request.preview {
-        (540, 960)
-    } else if high_res_source {
-        (2160, 3840)
-    } else {
-        (1080, 1920)
-    };
-
-    let mut track_points = Vec::new();
-    let tracking_strength = request.tracking_strength.clamp(0.0, 1.0);
-    let identity_threshold = request.identity_threshold.clamp(0.0, 1.0);
-    let stability = request.stability.clamp(0.0, 1.0);
-    if let Some(face_path_raw) = request.target_face_path.as_ref() {
-        let face_path_trim = face_path_raw.trim();
-        if !face_path_trim.is_empty() {
-            let face_path = PathBuf::from(face_path_trim);
-            if face_path.exists() {
-                track_points = estimate_face_track_points(
-                    &ffmpeg,
-                    &input_path,
-                    &face_path,
-                    info.width,
-                    info.height,
-                    tracking_strength,
-                    identity_threshold,
-                    stability,
-                )
-                .map_err(|e| format!("face tracking analysis failed: {e:#}"))?;
-            }
-        }
-    }
-
-    let filtergraph = build_reframe_filtergraph(out_width, out_height, &track_points);
-
     let job_id = Uuid::new_v4().to_string();
     let status = Arc::new(Mutex::new(RenderStatus {
         job_id: job_id.clone(),
         state: RenderState::Queued,
         progress: 0.0,
-        message: if track_points.is_empty() {
-            format!("Queued (center reframe, {}x{})", out_width, out_height)
-        } else {
-            format!("Queued ({}x{}, face track points: {}, strength={:.2}, id={:.2}, stab={:.2})", out_width, out_height, track_points.len(), tracking_strength, identity_threshold, stability)
-        },
+        message: "Queued (preparing reframe job)".to_string(),
         output_path: None,
     }));
 
@@ -529,21 +485,180 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
         renders.insert(job_id.clone(), status.clone());
     }
 
+    let preview = request.preview;
+    let requested_encoder = request.encoder.clone().unwrap_or(VideoEncoder::Auto);
+    let tracking_strength = request.tracking_strength.clamp(0.0, 1.0);
+    let identity_threshold = request.identity_threshold.clamp(0.0, 1.0);
+    let stability = request.stability.clamp(0.0, 1.0);
+    let target_face_path = request.target_face_path.clone();
+
     std::thread::spawn(move || {
         let started_at = SystemTime::now();
         let started_timer = Instant::now();
 
-        {
-            if let Ok(mut s) = status.lock() {
-                s.state = RenderState::Running;
-                s.message = if track_points.is_empty() {
-                    format!("Rendering started (center reframe, {}x{})", out_width, out_height)
-                } else {
-                    format!("Rendering started ({}x{}, face tracking, points={}, strength={:.2}, id={:.2}, stab={:.2})", out_width, out_height, track_points.len(), tracking_strength, identity_threshold, stability)
-                };
-            }
+        let mut ffmpeg_path_for_log = "(not resolved)".to_string();
+        let mut ffmpeg_ver_for_log = "unknown".to_string();
+        let mut available_hw_for_log: Vec<String> = Vec::new();
+        let mut chosen_encoder_for_log = requested_encoder.clone();
+        let mut width_for_log = 1080u32;
+        let mut height_for_log = 1920u32;
+        let mut frame_rate_for_log = if preview { 24 } else { 30 };
+        let mut beat_points_for_log = 0usize;
+        let mut filter_len_for_log = 0usize;
+        let mut render_report_for_log: Option<media::RenderExecutionReport> = None;
+
+        if let Ok(mut s) = status.lock() {
+            s.state = RenderState::Running;
+            s.progress = 0.02;
+            s.message = "Starting reframe pipeline...".to_string();
         }
 
+        let ffmpeg = match ffmpeg_binary() {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+        let ffprobe = match ffprobe_binary() {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+
+        ffmpeg_path_for_log = ffmpeg.display().to_string();
+        ffmpeg_ver_for_log = tool_version_line(&ffmpeg).unwrap_or_else(|_| "unknown".to_string());
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.06;
+            s.message = "Reading source metadata...".to_string();
+        }
+        let info = match probe_video(&ffprobe, &input_path) {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.10;
+            s.message = "Detecting available encoders...".to_string();
+        }
+        let available_hw = match detect_hardware_encoders(&ffmpeg) {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+        available_hw_for_log = available_hw.clone();
+
+        let chosen_encoder = match resolve_encoder(requested_encoder.clone(), &available_hw) {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err}");
+                }
+                return;
+            }
+        };
+        chosen_encoder_for_log = chosen_encoder.clone();
+
+        let frame_rate = if preview { 24 } else { 30 };
+        frame_rate_for_log = frame_rate;
+        let high_res_source = info.width >= 3000 || info.height >= 1700;
+        let (out_width, out_height) = if preview {
+            (540, 960)
+        } else if high_res_source {
+            (2160, 3840)
+        } else {
+            (1080, 1920)
+        };
+        width_for_log = out_width;
+        height_for_log = out_height;
+
+        let mut track_points = Vec::new();
+        if let Some(face_path_raw) = target_face_path.as_ref() {
+            let face_path_trim = face_path_raw.trim();
+            if !face_path_trim.is_empty() {
+                let face_path = PathBuf::from(face_path_trim);
+                if face_path.exists() {
+                    if let Ok(mut s) = status.lock() {
+                        s.progress = 0.16;
+                        s.message = format!(
+                            "Analyzing face track points... (strength={:.2}, id={:.2}, stab={:.2})",
+                            tracking_strength, identity_threshold, stability
+                        );
+                    }
+                    track_points = match estimate_face_track_points(
+                        &ffmpeg,
+                        &input_path,
+                        &face_path,
+                        info.width,
+                        info.height,
+                        tracking_strength,
+                        identity_threshold,
+                        stability,
+                    ) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            if let Ok(mut s) = status.lock() {
+                                s.state = RenderState::Failed;
+                                s.progress = 0.0;
+                                s.message = format!("face tracking analysis failed: {err:#}");
+                            }
+                            return;
+                        }
+                    };
+                }
+            }
+        }
+        beat_points_for_log = track_points.len();
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.24;
+            s.message = if track_points.is_empty() {
+                format!(
+                    "Preparing FFmpeg filtergraph (center reframe, {}x{})...",
+                    out_width, out_height
+                )
+            } else {
+                format!(
+                    "Preparing FFmpeg filtergraph ({}x{}, face points={})...",
+                    out_width,
+                    out_height,
+                    track_points.len()
+                )
+            };
+        }
+        let filtergraph = build_reframe_filtergraph(out_width, out_height, &track_points);
+        filter_len_for_log = filtergraph.len();
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.30;
+            s.message = "Starting FFmpeg render...".to_string();
+        }
         let render_result = render_with_ffmpeg(
             &ffmpeg,
             Path::new(&input_video),
@@ -551,17 +666,20 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
             &filtergraph,
             out_width,
             out_height,
-            !request.preview,
+            !preview,
             frame_rate,
             info.duration_sec,
             chosen_encoder.clone(),
             |progress: f64, message: String| {
                 if let Ok(mut s) = status.lock() {
-                    s.progress = progress.clamp(0.0, 1.0);
+                    s.progress = (0.30 + progress.clamp(0.0, 1.0) * 0.70).clamp(0.0, 1.0);
                     s.message = message;
                 }
             },
         );
+        if let Ok(report) = &render_result {
+            render_report_for_log = Some(report.clone());
+        }
 
         let elapsed_sec = started_timer.elapsed().as_secs_f64();
         let finished_at = SystemTime::now();
@@ -577,7 +695,15 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                     s.message = if track_points.is_empty() {
                         format!("Reframe completed (center, {}x{})", out_width, out_height)
                     } else {
-                        format!("Reframe completed ({}x{}, face tracked, points={}, strength={:.2}, id={:.2}, stab={:.2})", out_width, out_height, track_points.len(), tracking_strength, identity_threshold, stability)
+                        format!(
+                            "Reframe completed ({}x{}, face tracked, points={}, strength={:.2}, id={:.2}, stab={:.2})",
+                            out_width,
+                            out_height,
+                            track_points.len(),
+                            tracking_strength,
+                            identity_threshold,
+                            stability
+                        )
                     };
                     s.output_path = Some(output_path.clone());
                     final_message = s.message.clone();
@@ -601,15 +727,15 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                 elapsed_sec,
                 input_video: input_video.clone(),
                 output_video: output_path.clone(),
-                ffmpeg_path: ffmpeg.display().to_string(),
-                ffmpeg_version: ffmpeg_ver.clone(),
+                ffmpeg_path: ffmpeg_path_for_log,
+                ffmpeg_version: ffmpeg_ver_for_log,
                 requested_encoder,
-                chosen_encoder,
-                available_hw,
+                chosen_encoder: chosen_encoder_for_log,
+                available_hw: available_hw_for_log,
                 preset: ExportPreset::Shorts1080x1920,
-                width: out_width,
-                height: out_height,
-                frame_rate,
+                width: width_for_log,
+                height: height_for_log,
+                frame_rate: frame_rate_for_log,
                 effects: EffectsConfig {
                     zoom_mode: ZoomMode::None,
                     zoom_strength: 0.0,
@@ -617,15 +743,16 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                     beat_sensitivity: 0.5,
                     motion_blur_strength: 0.0,
                 },
-                beat_points: track_points.len(),
-                filter_len: filtergraph.len(),
-                render_report: render_result.ok(),
+                beat_points: beat_points_for_log,
+                filter_len: filter_len_for_log,
+                render_report: render_report_for_log,
             },
         );
     });
 
     Ok(job_id)
 }
+
 #[tauri::command]
 fn get_render_status(job_id: String, state: State<AppState>) -> Result<RenderStatus, String> {
     let renders = state.renders.lock().map_err(|_| "State lock poisoned")?;
@@ -656,6 +783,146 @@ fn verify_onnx_runtime_assets() -> Result<Vec<String>, String> {
     Ok(verify_onnx_assets())
 }
 
+#[tauri::command]
+fn score_face_folder(path: String) -> Result<serde_json::Value, String> {
+    let folder = PathBuf::from(path.trim());
+    if !folder.exists() || !folder.is_dir() {
+        return Err("Target face folder does not exist or is not a directory".to_string());
+    }
+    score_face_folder_with_onnx_python(&folder).map_err(|e| format!("{e:#}"))
+}#[tauri::command]
+fn score_and_move_face_folder(path: String) -> Result<serde_json::Value, String> {
+    let folder = PathBuf::from(path.trim());
+    if !folder.exists() || !folder.is_dir() {
+        return Err("Target face folder does not exist or is not a directory".to_string());
+    }
+
+    let score = score_face_folder_with_onnx_python(&folder).map_err(|e| format!("{e:#}"))?;
+    let parent = folder.parent().map(PathBuf::from).unwrap_or_else(|| folder.clone());
+    let botu_dir = parent.join("botu");
+    fs::create_dir_all(&botu_dir).map_err(|e| format!("failed to create botu dir: {e}"))?;
+
+    let mut moved: Vec<serde_json::Value> = Vec::new();
+    let mut skipped: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+
+    let items = score
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for item in items {
+        let recommendation = item
+            .get("recommendation")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if recommendation != "exclude" {
+            continue;
+        }
+
+        let src_str = match item.get("path").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => {
+                errors.push(serde_json::json!({
+                    "reason": "missing path in score item",
+                    "item": item
+                }));
+                continue;
+            }
+        };
+
+        let src = PathBuf::from(src_str);
+        if !src.exists() || !src.is_file() {
+            skipped.push(serde_json::json!({
+                "path": src.display().to_string(),
+                "reason": "file missing"
+            }));
+            continue;
+        }
+        if src.starts_with(&botu_dir) {
+            skipped.push(serde_json::json!({
+                "path": src.display().to_string(),
+                "reason": "already under botu"
+            }));
+            continue;
+        }
+
+        let name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("invalid file name: {}", src.display()))?;
+
+        let mut dst = botu_dir.join(name);
+        if dst.exists() {
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+            let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("");
+            let mut i = 1u32;
+            loop {
+                let candidate = if ext.is_empty() {
+                    format!("{stem}_{i}")
+                } else {
+                    format!("{stem}_{i}.{ext}")
+                };
+                dst = botu_dir.join(candidate);
+                if !dst.exists() {
+                    break;
+                }
+                i += 1;
+            }
+        }
+
+        match fs::rename(&src, &dst) {
+            Ok(_) => {
+                moved.push(serde_json::json!({
+                    "from": src.display().to_string(),
+                    "to": dst.display().to_string()
+                }));
+            }
+            Err(rename_err) => {
+                match fs::copy(&src, &dst) {
+                    Ok(_) => match fs::remove_file(&src) {
+                        Ok(_) => {
+                            moved.push(serde_json::json!({
+                                "from": src.display().to_string(),
+                                "to": dst.display().to_string(),
+                                "via": "copy_remove"
+                            }));
+                        }
+                        Err(remove_err) => {
+                            errors.push(serde_json::json!({
+                                "from": src.display().to_string(),
+                                "to": dst.display().to_string(),
+                                "reason": format!("copy ok but remove failed: {remove_err}")
+                            }));
+                        }
+                    },
+                    Err(copy_err) => {
+                        errors.push(serde_json::json!({
+                            "from": src.display().to_string(),
+                            "to": dst.display().to_string(),
+                            "reason": format!("rename failed: {rename_err}; copy failed: {copy_err}")
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "folder": folder.display().to_string(),
+        "botu": botu_dir.display().to_string(),
+        "score": score,
+        "moveSummary": {
+            "movedCount": moved.len(),
+            "skippedCount": skipped.len(),
+            "errorCount": errors.len()
+        },
+        "moved": moved,
+        "skipped": skipped,
+        "errors": errors
+    }))
+}
 #[tauri::command]
 fn get_encoder_options() -> Result<Vec<String>, String> {
     let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
@@ -814,6 +1081,8 @@ pub fn run() {
             get_render_status,
             verify_runtime_tools,
             verify_onnx_runtime_assets,
+            score_face_folder,
+            score_and_move_face_folder,
             get_encoder_options
         ])
         .run(tauri::generate_context!())
@@ -880,6 +1149,23 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

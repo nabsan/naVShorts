@@ -26,35 +26,52 @@
       <h1>Effects Workspace</h1>
       <p class="sub">Step 2: Add zoom/beat effects and export final vertical video.</p>
 
-      <label>Video file path</label>
-      <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
-      <div class="row">
-        <button id="openBtn">Select & Open Video</button>
+      <div class="row row-single topActionRow">
         <button id="verifyBtn" class="secondary">Verify FFmpeg</button>
       </div>
 
+      <div class="fieldRow fieldRow3">
+        <label for="videoPath" class="inlineLabel">Video file path</label>
+        <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
+        <button id="openBtn">Select & Open Video</button>
+      </div>
+
       <h2>Effects</h2>
-      <label>Zoom mode</label>
-      <select id="zoomMode">
-        <option value="none">None</option>
-        <option value="zoomIn" selected>Zoom In</option>
-        <option value="zoomOut">Zoom Out</option>
-        <option value="zoomInOutBeat">Zoom In & Out (Beat Sync)</option>
-        <option value="zoomInOutLoop">Zoom In & Out (Loop)</option>
-        <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
-      </select>
+      <div class="fieldRow fieldRow2">
+        <label for="zoomMode" class="inlineLabel">Zoom mode</label>
+        <select id="zoomMode">
+          <option value="none">None</option>
+          <option value="zoomIn" selected>Zoom In</option>
+          <option value="zoomOut">Zoom Out</option>
+          <option value="zoomInOutBeat">Zoom In & Out (Beat Sync)</option>
+          <option value="zoomInOutLoop">Zoom In & Out (Loop)</option>
+          <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
+        </select>
+      </div>
 
-      <label>Zoom strength <span id="zoomStrengthValue">0.18</span></label>
-      <input id="zoomStrength" type="range" min="0" max="1" step="0.01" value="0.18" />
+      <div class="sliderRow">
+        <div class="sliderLabel">Zoom strength</div>
+        <div id="zoomStrengthValue" class="sliderValue">0.18</div>
+        <input id="zoomStrength" type="range" min="0" max="1" step="0.01" value="0.18" />
+      </div>
 
-      <label>Bounce strength <span id="bounceStrengthValue">0.16</span></label>
-      <input id="bounceStrength" type="range" min="0" max="1" step="0.01" value="0.16" />
+      <div class="sliderRow">
+        <div class="sliderLabel">Bounce strength</div>
+        <div id="bounceStrengthValue" class="sliderValue">0.16</div>
+        <input id="bounceStrength" type="range" min="0" max="1" step="0.01" value="0.16" />
+      </div>
 
-      <label>Beat sensitivity <span id="beatSensitivityValue">0.55</span></label>
-      <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
+      <div class="sliderRow">
+        <div class="sliderLabel">Beat sensitivity</div>
+        <div id="beatSensitivityValue" class="sliderValue">0.55</div>
+        <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
+      </div>
 
-      <label>Motion blur strength <span id="motionBlurStrengthValue">0.00</span></label>
-      <input id="motionBlurStrength" type="range" min="0" max="1" step="0.01" value="0.00" />
+      <div class="sliderRow">
+        <div class="sliderLabel">Motion blur strength</div>
+        <div id="motionBlurStrengthValue" class="sliderValue">0.00</div>
+        <input id="motionBlurStrength" type="range" min="0" max="1" step="0.01" value="0.00" />
+      </div>
 
       <div class="row">
         <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
@@ -62,24 +79,30 @@
       </div>
 
       <h2>Render</h2>
-      <label>Preset</label>
-      <select id="preset">
-        <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
-        <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
-        <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
-      </select>
+      <div class="fieldRow fieldRow2">
+        <label for="preset" class="inlineLabel">Preset</label>
+        <select id="preset">
+          <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
+          <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
+          <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
+        </select>
+      </div>
 
-      <label>Output path</label>
-      <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
+      <div class="fieldRow fieldRow2">
+        <label for="outputPath" class="inlineLabel">Output path</label>
+        <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
+      </div>
 
-      <label>Video encoder</label>
-      <select id="encoder">
-        <option value="auto" selected>Auto (recommended)</option>
-        <option value="cpu">CPU (libx264)</option>
-        <option value="nvidia">NVIDIA (NVENC)</option>
-        <option value="intel">Intel (QSV)</option>
-        <option value="amd">AMD (AMF)</option>
-      </select>
+      <div class="fieldRow fieldRow2">
+        <label for="encoder" class="inlineLabel">Video encoder</label>
+        <select id="encoder">
+          <option value="auto" selected>Auto (recommended)</option>
+          <option value="cpu">CPU (libx264)</option>
+          <option value="nvidia">NVIDIA (NVENC)</option>
+          <option value="intel">Intel (QSV)</option>
+          <option value="amd">AMD (AMF)</option>
+        </select>
+      </div>
 
       <div class="row">
         <button id="previewBtn" class="secondary">Render Preview</button>
@@ -100,6 +123,6 @@
     </section>
   </main>
 
-  <script type="module" src="./app.js?v=20260311-1"></script>
+  <script type="module" src="./app.js?v=20260312-2"></script>
 </body>
 </html>

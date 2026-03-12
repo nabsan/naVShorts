@@ -77,3 +77,14 @@ Place under:
 npm install
 npm.cmd run tauri dev
 ```
+
+## Recent Updates
+- Reframe render startup no longer appears frozen:
+- `render_reframe` now returns a job immediately and updates staged status messages (`Starting pipeline`, `Reading metadata`, `Detecting encoders`, `Analyzing face track`, `Preparing filtergraph`, `Starting FFmpeg render`).
+- Added face folder scoring workflow:
+- `Score Face Folder` for ONNX-based quality scoring.
+- `Score + Move Excluded (botu)` to move exclude-recommended images into sibling `botu` folder, with move logs shown in `Status`.
+- UI compact layout updates (both workspaces):
+- `Verify FFmpeg` button placed at top.
+- Forms use horizontal rows for `label + input` and `label + input + button` to reduce vertical height.
+- Sliders remain horizontal as `label | value | slider`.

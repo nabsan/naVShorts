@@ -195,6 +195,65 @@ fn verify_python_identity_stack() -> String {
         Err(e) => format!("python_identity_stack=ERR:{e}"),
     }
 }
+fn find_score_face_script() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("scripts").join("score_face_folder.py"));
+        candidates.push(cwd.join("scripts").join("score_face_folder.py"));
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        if let Some(base) = exe.parent() {
+            candidates.push(base.join("resources").join("scripts").join("score_face_folder.py"));
+        }
+    }
+
+    candidates.into_iter().find(|p| p.exists())
+}
+
+pub fn score_face_folder_with_onnx_python(folder: &Path) -> Result<serde_json::Value> {
+    let script = find_score_face_script().ok_or_else(|| anyhow!("score_face_folder.py not found"))?;
+    let identity_script = find_identity_track_script().ok_or_else(|| anyhow!("identity_track.py not found"))?;
+
+    let model_dir = find_model_dir().ok_or_else(|| anyhow!("onnx model dir not found"))?;
+    let detector = model_dir.join("face_detector.onnx");
+    let arcface = model_dir.join("arcface.onnx");
+
+    if !detector.exists() || !arcface.exists() {
+        return Err(anyhow!(
+            "onnx models missing (detector={}, arcface={})",
+            detector.display(),
+            arcface.display()
+        ));
+    }
+
+    let output = Command::new("python")
+        .arg(script)
+        .arg("--folder")
+        .arg(folder)
+        .arg("--detector")
+        .arg(detector)
+        .arg("--arcface")
+        .arg(arcface)
+        .arg("--identity-script")
+        .arg(identity_script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to start score_face_folder.py")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "score_face_folder.py failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("score_face_folder.py returned invalid json")?;
+    Ok(parsed)
+}
 fn find_identity_track_script() -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -1355,6 +1414,8 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
 
 
 

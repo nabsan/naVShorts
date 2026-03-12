@@ -15,10 +15,13 @@ const tauriInvoke = resolveInvoke();
 const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "naVShorts.reframe.v1";
+const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
 
 const sourceVideoPath = $("sourceVideoPath");
 const targetFacePath = $("targetFacePath");
 const pickTargetFaceBtn = $("pickTargetFaceBtn");
+const scoreFaceFolderBtn = $("scoreFaceFolderBtn");
+const moveExcludedBtn = $("moveExcludedBtn");
 const reframeOutputPath = $("reframeOutputPath");
 const encoder = $("encoder");
 const trackingStrength = $("trackingStrength");
@@ -92,6 +95,7 @@ function bindSlider(inputEl, labelEl) {
 }
 
 function loadSettings() {
+  targetFacePath.value = DEFAULT_FACE_FOLDER;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return;
@@ -100,6 +104,9 @@ function loadSettings() {
     if (typeof s.identityThreshold === "number") identityThreshold.value = String(s.identityThreshold);
     if (typeof s.stability === "number") stability.value = String(s.stability);
     if (typeof s.encoder === "string") encoder.value = s.encoder;
+    if (typeof s.targetFacePath === "string" && s.targetFacePath.trim()) {
+      targetFacePath.value = s.targetFacePath;
+    }
   } catch {
     // ignore broken local settings
   }
@@ -111,6 +118,7 @@ function saveSettings() {
     identityThreshold: Number(identityThreshold.value),
     stability: Number(stability.value),
     encoder: encoder.value,
+    targetFacePath: targetFacePath.value.trim(),
   };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
 }
@@ -234,6 +242,7 @@ if (pickTargetFaceBtn) {
         return;
       }
       targetFacePath.value = picked;
+      saveSettings();
       printStatus("Target face folder selected.");
     } catch (e) {
       printStatus(String(e));
@@ -241,6 +250,38 @@ if (pickTargetFaceBtn) {
   });
 }
 
+if (scoreFaceFolderBtn) {
+  scoreFaceFolderBtn.addEventListener("click", async () => {
+    try {
+      const folder = (targetFacePath.value || "").trim();
+      if (!folder) {
+        printStatus("Target face folder path is empty.");
+        return;
+      }
+      printStatus("Scoring face folder...");
+      const result = await invoke("score_face_folder", { path: folder });
+      printStatus(result);
+    } catch (e) {
+      printStatus(String(e));
+    }
+  });
+}
+if (moveExcludedBtn) {
+  moveExcludedBtn.addEventListener("click", async () => {
+    try {
+      const folder = (targetFacePath.value || "").trim();
+      if (!folder) {
+        printStatus("Target face folder path is empty.");
+        return;
+      }
+      printStatus("Scoring and moving excluded files to botu...");
+      const result = await invoke("score_and_move_face_folder", { path: folder });
+      printStatus(result);
+    } catch (e) {
+      printStatus(String(e));
+    }
+  });
+}
 $("openSourceBtn").addEventListener("click", async () => {
   try {
     const picked = await invoke("pick_video_file");
@@ -279,3 +320,7 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
+
+
+
+

@@ -196,6 +196,73 @@ def build_target_embedding(det_sess, arc_sess, image_paths):
     return l2_norm(mean_emb)
 
 
+def bbox_center_ratio(box, w):
+    cx = (box[0] + box[2]) * 0.5
+    return max(0.05, min(0.95, cx / max(1.0, w)))
+
+
+def clip_bbox(box, w, h):
+    x1, y1, x2, y2 = box
+    x1 = max(0.0, min(x1, w - 2.0))
+    y1 = max(0.0, min(y1, h - 2.0))
+    x2 = max(x1 + 1.0, min(x2, w - 1.0))
+    y2 = max(y1 + 1.0, min(y2, h - 1.0))
+    return (x1, y1, x2, y2)
+
+
+def shift_bbox(box, dx, dy, w, h):
+    x1, y1, x2, y2 = box
+    return clip_bbox((x1 + dx, y1 + dy, x2 + dx, y2 + dy), w, h)
+
+
+def track_bbox_optical_flow(prev_gray, gray, box):
+    h, w = gray.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in box]
+    x1 = max(0, min(x1, w - 2))
+    y1 = max(0, min(y1, h - 2))
+    x2 = max(x1 + 1, min(x2, w - 1))
+    y2 = max(y1 + 1, min(y2, h - 1))
+
+    mask = np.zeros_like(prev_gray)
+    mask[y1:y2, x1:x2] = 255
+    p0 = cv2.goodFeaturesToTrack(prev_gray, maxCorners=60, qualityLevel=0.01, minDistance=3, mask=mask)
+    if p0 is None or len(p0) < 6:
+        return None
+
+    p1, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, p0, None)
+    if p1 is None or st is None:
+        return None
+
+    good_old = p0[st.reshape(-1) == 1]
+    good_new = p1[st.reshape(-1) == 1]
+    if len(good_old) < 6:
+        return None
+
+    delta = good_new - good_old
+    dx = float(np.median(delta[:, 0]))
+    dy = float(np.median(delta[:, 1]))
+    return shift_bbox(box, dx, dy, w, h)
+
+
+def kalman_predict(x, P, dt, q):
+    F = np.array([[1.0, dt], [0.0, 1.0]], dtype=np.float32)
+    Q = np.array([[q * dt * dt, 0.0], [0.0, q]], dtype=np.float32)
+    x = F @ x
+    P = F @ P @ F.T + Q
+    return x, P
+
+
+def kalman_update(x, P, z, r):
+    H = np.array([[1.0, 0.0]], dtype=np.float32)
+    R = np.array([[r]], dtype=np.float32)
+    y = np.array([[z]], dtype=np.float32) - (H @ x.reshape(2, 1))
+    S = H @ P @ H.T + R
+    K = P @ H.T @ np.linalg.inv(S)
+    x_new = x.reshape(2, 1) + K @ y
+    P_new = (np.eye(2, dtype=np.float32) - K @ H) @ P
+    return x_new.reshape(2), P_new
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
@@ -206,6 +273,8 @@ def main():
     ap.add_argument("--sample-fps", type=float, default=4.0)
     ap.add_argument("--sample-width", type=int, default=384)
     ap.add_argument("--sim-threshold", type=float, default=0.28)
+    ap.add_argument("--tracking-strength", type=float, default=0.72)
+    ap.add_argument("--stability", type=float, default=0.68)
     args = ap.parse_args()
 
     if not args.target and not args.target_dir:
@@ -226,56 +295,88 @@ def main():
     if not fps or fps <= 0:
         fps = 30.0
 
-    step = max(1, int(round(fps / max(0.1, args.sample_fps))))
+    detect_interval = max(1, int(round(fps / max(0.5, args.sample_fps))))
     points = []
+
+    prev_gray = None
     frame_idx = 0
-    prev_cx = None
+    tracked_box = None
+    last_center_ratio = None
+
+    st = float(max(0.0, min(1.0, args.stability)))
+    q = 0.001 + (1.0 - st) * 0.02
+    r = 0.004 + st * 0.03
+    outlier_gate = 0.10 + (1.0 - st) * 0.12
+
+    x = np.array([0.5, 0.0], dtype=np.float32)
+    P = np.array([[0.05, 0.0], [0.0, 0.05]], dtype=np.float32)
 
     while True:
         ok, frame = cap.read()
         if not ok:
             break
 
-        if frame_idx % step != 0:
-            frame_idx += 1
-            continue
+        h0, w0 = frame.shape[:2]
+        if args.sample_width > 0 and w0 > args.sample_width:
+            scale = args.sample_width / float(w0)
+            frame = cv2.resize(frame, (args.sample_width, int(h0 * scale)), interpolation=cv2.INTER_LINEAR)
 
         h, w = frame.shape[:2]
-        if args.sample_width > 0 and w > args.sample_width:
-            scale = args.sample_width / float(w)
-            frame = cv2.resize(frame, (args.sample_width, int(h * scale)), interpolation=cv2.INTER_LINEAR)
-            h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        faces = detect_faces(det_sess, frame)
-        best = None
-        best_sim = -1.0
+        measured_center = None
+        force_detect = tracked_box is None
+        do_detect = force_detect or (frame_idx % detect_interval == 0)
 
-        for face in faces:
-            crop = crop_face(frame, face)
-            if crop is None:
-                continue
-            emb = get_single_embedding(arc_sess, crop)
-            sim = cosine(target_emb, emb)
+        if do_detect:
+            faces = detect_faces(det_sess, frame)
+            best = None
+            best_sim = -1.0
 
-            cx = (face[0] + face[2]) * 0.5
-            if prev_cx is not None:
-                sim -= min(0.25, abs(cx - prev_cx) / max(1.0, w) * 0.4)
+            for face in faces:
+                crop = crop_face(frame, face)
+                if crop is None:
+                    continue
 
-            if sim > best_sim:
-                best_sim = sim
-                best = face
+                emb = get_single_embedding(arc_sess, crop)
+                sim = cosine(target_emb, emb)
 
-        if best is not None and best_sim >= args.sim_threshold:
-            cx = (best[0] + best[2]) * 0.5
-            prev_cx = cx
-            points.append(
-                {
-                    "time_sec": frame_idx / fps,
-                    "center_x_ratio": max(0.1, min(0.9, cx / max(1.0, w))),
-                    "similarity": best_sim,
-                }
-            )
+                cx_ratio = bbox_center_ratio(face, w)
+                if last_center_ratio is not None:
+                    sim -= min(0.20, abs(cx_ratio - last_center_ratio) * 0.8)
 
+                if sim > best_sim:
+                    best_sim = sim
+                    best = face
+
+            if best is not None and best_sim >= args.sim_threshold:
+                tracked_box = clip_bbox(best[:4], w, h)
+                measured_center = bbox_center_ratio(tracked_box, w)
+        else:
+            if tracked_box is not None and prev_gray is not None:
+                moved = track_bbox_optical_flow(prev_gray, gray, tracked_box)
+                if moved is not None:
+                    tracked_box = moved
+                    measured_center = bbox_center_ratio(tracked_box, w)
+
+        dt = 1.0 / max(1.0, fps)
+        x, P = kalman_predict(x, P, dt, q)
+
+        if measured_center is not None:
+            pred = float(x[0])
+            if abs(measured_center - pred) <= outlier_gate:
+                x, P = kalman_update(x, P, measured_center, r)
+                last_center_ratio = measured_center
+            # If outlier, ignore update and keep prediction.
+
+        cx = max(0.1, min(0.9, float(x[0])))
+        points.append({
+            "time_sec": frame_idx / fps,
+            "center_x_ratio": cx,
+            "similarity": None,
+        })
+
+        prev_gray = gray
         frame_idx += 1
 
     cap.release()
