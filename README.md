@@ -1,4 +1,4 @@
-# naVShorts (Windows)
+﻿# naVShorts (Windows)
 
 Windows desktop app for vertical social videos.
 Built with **Tauri + Rust + FFmpeg**.
@@ -18,18 +18,37 @@ Built with **Tauri + Rust + FFmpeg**.
 - Top tabs clearly show active workspace.
 - App branding shows `naVShorts` and custom icon.
 - Last-used values are remembered and restored on next launch.
-  - Effects: zoom mode/strength, bounce, beat sensitivity, motion blur, preset, encoder
-  - Reframe: tracking strength, identity threshold, stability, encoder
+- Effects settings persisted: zoom mode/strength, bounce, beat sensitivity, motion blur, preset, encoder.
+- Reframe settings persisted: tracking strength, identity threshold, stability, encoder.
 - Status panel is fixed-size with internal scroll to avoid layout break on long logs.
 
 ## Reframe Quality (Current)
 - Preview: `540x960`
-- Final reframe output is now automatic by source resolution:
-  - 4K-class source (>=3000 width or >=1700 height): `2160x3840`
-  - otherwise: `1080x1920`
+- Final reframe output is automatic by source resolution:
+- 4K-class source (>=3000 width or >=1700 height): `2160x3840`
+- otherwise: `1080x1920`
 - Reframe encoder quality was raised for final output.
-  - CPU x264: lower CRF + slower preset on HQ path
-  - NVIDIA/Intel/AMD: lower CQ/QP/quality values on HQ path
+- CPU x264: lower CRF + slower preset on HQ path.
+- NVIDIA/Intel/AMD: lower CQ/QP/quality values on HQ path.
+
+## Face Tracking Tuning Guide
+Recommended starting point:
+- `Face tracking strength`: `0.72`
+- `Stability`: `0.68`
+- `Identity threshold`: `0.58`
+
+Adjustment rules:
+1. Tracking is weak or often loses the target.
+- Increase `Face tracking strength` by `+0.05` steps (up to about `0.80-0.90`).
+2. Frame movement is too nervous or jittery.
+- Increase `Stability` by `+0.05` steps (up to about `0.75-0.85`).
+3. Tracking jumps to another person.
+- Increase `Identity threshold` by `+0.03` to `+0.05`.
+4. The face is missed too often.
+- Slightly decrease `Identity threshold`, or raise `Face tracking strength`.
+
+Practical preset for dance videos:
+- `tracking 0.78 / stability 0.76 / identity threshold 0.58`
 
 ## Export Presets (Effects)
 - YouTube Shorts `1080x1920`
