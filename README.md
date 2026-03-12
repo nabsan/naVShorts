@@ -88,3 +88,9 @@ npm.cmd run tauri dev
 - `Verify FFmpeg` button placed at top.
 - Forms use horizontal rows for `label + input` and `label + input + button` to reduce vertical height.
 - Sliders remain horizontal as `label | value | slider`.
+- Identity tracking was strengthened with multi-reference matching:
+- Target identity now uses a profile score (`prototype + max + top-k mean`) instead of simple single-mean cosine.
+- Added hysteresis gating (`enter threshold` / `keep threshold`) to reduce ID flapping.
+- Added motion-consistency scoring (IoU bonus + distance penalty to previous tracked box).
+- Added temporary loss tolerance (`max_lost_frames`) to avoid frequent relock jitter.
+- `tracking_strength` and `stability` are now forwarded to ONNX identity tracking process.

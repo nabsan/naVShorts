@@ -168,7 +168,7 @@ def collect_target_images(target, target_dir):
     return dedup
 
 
-def build_target_embedding(det_sess, arc_sess, image_paths):
+def build_target_profile(det_sess, arc_sess, image_paths):
     embs = []
     for img_path in image_paths:
         img = cv2.imread(img_path)
@@ -192,8 +192,23 @@ def build_target_embedding(det_sess, arc_sess, image_paths):
     if not embs:
         raise RuntimeError("failed to build target embedding from selected image(s)")
 
-    mean_emb = np.mean(np.stack(embs, axis=0), axis=0).astype(np.float32)
-    return l2_norm(mean_emb)
+    emb_mat = np.stack(embs, axis=0).astype(np.float32)
+    proto = l2_norm(np.mean(emb_mat, axis=0).astype(np.float32))
+    return {"prototype": proto, "embeddings": emb_mat, "count": int(emb_mat.shape[0])}
+
+
+def identity_similarity(profile, emb):
+    proto = profile["prototype"]
+    refs = profile["embeddings"]
+    sim_proto = cosine(proto, emb)
+    sims = refs @ emb
+    sim_max = float(np.max(sims))
+    if sims.shape[0] >= 3:
+        topk = min(3, sims.shape[0])
+        sim_top = float(np.mean(np.sort(sims)[-topk:]))
+    else:
+        sim_top = float(np.mean(sims))
+    return 0.45 * sim_proto + 0.35 * sim_max + 0.20 * sim_top
 
 
 def bbox_center_ratio(box, w):
@@ -285,7 +300,7 @@ def main():
     target_images = collect_target_images(args.target, args.target_dir)
     if not target_images:
         raise RuntimeError("no target face images found")
-    target_emb = build_target_embedding(det_sess, arc_sess, target_images)
+    target_profile = build_target_profile(det_sess, arc_sess, target_images)
 
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
@@ -296,12 +311,14 @@ def main():
         fps = 30.0
 
     detect_interval = max(1, int(round(fps / max(0.5, args.sample_fps))))
+    detect_interval_unlocked = max(1, detect_interval // 2)
     points = []
 
     prev_gray = None
     frame_idx = 0
     tracked_box = None
     last_center_ratio = None
+    lost_frames = 0
 
     st = float(max(0.0, min(1.0, args.stability)))
     q = 0.001 + (1.0 - st) * 0.02
@@ -310,6 +327,11 @@ def main():
 
     x = np.array([0.5, 0.0], dtype=np.float32)
     P = np.array([[0.05, 0.0], [0.0, 0.05]], dtype=np.float32)
+
+    trk = float(max(0.0, min(1.0, args.tracking_strength)))
+    max_lost_frames = int(round(4 + 14 * trk))
+    enter_threshold = float(args.sim_threshold + 0.02)
+    keep_threshold = float(max(0.10, args.sim_threshold - 0.04))
 
     while True:
         ok, frame = cap.read()
@@ -326,12 +348,14 @@ def main():
 
         measured_center = None
         force_detect = tracked_box is None
-        do_detect = force_detect or (frame_idx % detect_interval == 0)
+        current_detect_interval = detect_interval if tracked_box is not None else detect_interval_unlocked
+        do_detect = force_detect or (frame_idx % current_detect_interval == 0)
 
         if do_detect:
             faces = detect_faces(det_sess, frame)
             best = None
             best_sim = -1.0
+            best_score = -1e9
 
             for face in faces:
                 crop = crop_face(frame, face)
@@ -339,25 +363,50 @@ def main():
                     continue
 
                 emb = get_single_embedding(arc_sess, crop)
-                sim = cosine(target_emb, emb)
+                sim = identity_similarity(target_profile, emb)
 
                 cx_ratio = bbox_center_ratio(face, w)
                 if last_center_ratio is not None:
                     sim -= min(0.20, abs(cx_ratio - last_center_ratio) * 0.8)
 
-                if sim > best_sim:
+                score = sim
+                if tracked_box is not None:
+                    t_cx = (tracked_box[0] + tracked_box[2]) * 0.5
+                    t_cy = (tracked_box[1] + tracked_box[3]) * 0.5
+                    f_cx = (face[0] + face[2]) * 0.5
+                    f_cy = (face[1] + face[3]) * 0.5
+                    dist = np.hypot(f_cx - t_cx, f_cy - t_cy) / max(1.0, np.hypot(w, h))
+                    iou_v = iou(face[:4], tracked_box)
+                    score += iou_v * 0.15
+                    score -= dist * 0.22
+
+                if score > best_score:
+                    best_score = score
                     best_sim = sim
                     best = face
 
-            if best is not None and best_sim >= args.sim_threshold:
-                tracked_box = clip_bbox(best[:4], w, h)
-                measured_center = bbox_center_ratio(tracked_box, w)
+            if best is not None:
+                locked = tracked_box is not None
+                threshold = keep_threshold if locked else enter_threshold
+                if best_sim >= threshold:
+                    tracked_box = clip_bbox(best[:4], w, h)
+                    measured_center = bbox_center_ratio(tracked_box, w)
+                    lost_frames = 0
+                else:
+                    lost_frames += 1
+                    if lost_frames > max_lost_frames:
+                        tracked_box = None
         else:
             if tracked_box is not None and prev_gray is not None:
                 moved = track_bbox_optical_flow(prev_gray, gray, tracked_box)
                 if moved is not None:
                     tracked_box = moved
                     measured_center = bbox_center_ratio(tracked_box, w)
+                    lost_frames = 0
+                else:
+                    lost_frames += 1
+                    if lost_frames > max_lost_frames:
+                        tracked_box = None
 
         dt = 1.0 / max(1.0, fps)
         x, P = kalman_predict(x, P, dt, q)
@@ -367,7 +416,6 @@ def main():
             if abs(measured_center - pred) <= outlier_gate:
                 x, P = kalman_update(x, P, measured_center, r)
                 last_center_ratio = measured_center
-            # If outlier, ignore update and keep prediction.
 
         cx = max(0.1, min(0.9, float(x[0])))
         points.append({

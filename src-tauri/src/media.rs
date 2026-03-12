@@ -277,6 +277,8 @@ fn track_identity_with_onnx_python(
     sample_width: u32,
     sample_fps: f64,
     sim_threshold: f64,
+    tracking_strength: f64,
+    stability: f64,
 ) -> Result<Vec<ReframeTrackPoint>> {
     let script = find_identity_track_script()
         .ok_or_else(|| anyhow!("identity_track.py not found"))?;
@@ -307,7 +309,11 @@ fn track_identity_with_onnx_python(
         .arg("--sample-width")
         .arg(sample_width.to_string())
         .arg("--sim-threshold")
-        .arg(format!("{sim_threshold:.4}"));
+        .arg(format!("{sim_threshold:.4}"))
+        .arg("--tracking-strength")
+        .arg(format!("{tracking_strength:.4}"))
+        .arg("--stability")
+        .arg(format!("{stability:.4}"));
 
     if target_face_ref.is_dir() {
         command.arg("--target-dir").arg(target_face_ref);
@@ -639,6 +645,8 @@ pub fn estimate_face_track_points(
         sample_width,
         sample_fps,
         sim_threshold,
+        s,
+        stab,
     ) {
         if points.len() >= 6 {
             return Ok(compress_track_points(&points, max_points, alpha, stab));
@@ -1414,6 +1422,9 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
+
 
 
 
