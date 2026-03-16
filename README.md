@@ -54,6 +54,11 @@ Adjustment rules:
 Practical preset for dance videos:
 - `tracking 0.78 / stability 0.76 / identity threshold 0.58`
 
+Recommended starting values by tracking engine:
+- `Face Identity (ONNX)`: `tracking 0.78 / id 0.58 / stability 0.76`
+- `Person YOLO + DeepSORT`: `tracking 0.80 / id 0.60 / stability 0.74`
+- `Person YOLO + ByteTrack + ArcFace`: `tracking 0.84 / id 0.66 / stability 0.82`
+
 ## Export Presets (Effects)
 - YouTube Shorts `1080x1920`
 - Instagram Reels `1080x1920`

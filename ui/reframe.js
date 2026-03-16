@@ -16,6 +16,11 @@ const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "naVShorts.reframe.v1";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
+const ENGINE_PRESETS = {
+  faceIdentity: { trackingStrength: 0.78, identityThreshold: 0.58, stability: 0.76 },
+  yoloDeepsortPerson: { trackingStrength: 0.80, identityThreshold: 0.60, stability: 0.74 },
+  yoloBytetrackArcface: { trackingStrength: 0.84, identityThreshold: 0.66, stability: 0.82 },
+};
 
 const sourceVideoPath = $("sourceVideoPath");
 const targetFacePath = $("targetFacePath");
@@ -38,6 +43,8 @@ const renderProgress = $("renderProgress");
 const etaInfo = $("etaInfo");
 
 let lastOutput = "";
+let reframeSettingsCache = { engineSettings: {} };
+let currentEngineKey = "faceIdentity";
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -82,6 +89,37 @@ function setProgress(progress, etaText) {
   etaInfo.textContent = etaText;
 }
 
+function getSelectedEngine() {
+  return trackingEngine ? trackingEngine.value : "faceIdentity";
+}
+
+function getEnginePreset(engine) {
+  return ENGINE_PRESETS[engine] || ENGINE_PRESETS.faceIdentity;
+}
+
+function syncSliderLabels() {
+  if (trackingStrength && trackingStrengthValue) trackingStrengthValue.textContent = Number(trackingStrength.value).toFixed(2);
+  if (identityThreshold && identityThresholdValue) identityThresholdValue.textContent = Number(identityThreshold.value).toFixed(2);
+  if (stability && stabilityValue) stabilityValue.textContent = Number(stability.value).toFixed(2);
+}
+
+function captureCurrentEngineSettings() {
+  return {
+    trackingStrength: Number(trackingStrength?.value ?? 0.72),
+    identityThreshold: Number(identityThreshold?.value ?? 0.58),
+    stability: Number(stability?.value ?? 0.68),
+  };
+}
+
+function applyEngineSettings(engine, settings, persist = false) {
+  const next = settings || getEnginePreset(engine);
+  trackingStrength.value = String(next.trackingStrength);
+  identityThreshold.value = String(next.identityThreshold);
+  stability.value = String(next.stability);
+  syncSliderLabels();
+  if (persist) saveSettings();
+}
+
 function bindSlider(inputEl, labelEl) {
   if (!inputEl || !labelEl) return;
   const sync = () => {
@@ -99,31 +137,73 @@ function loadSettings() {
   targetFacePath.value = DEFAULT_FACE_FOLDER;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return;
+    if (!raw) {
+      currentEngineKey = getSelectedEngine();
+      applyEngineSettings(currentEngineKey, getEnginePreset(currentEngineKey), false);
+      return;
+    }
     const s = JSON.parse(raw);
-    if (typeof s.trackingStrength === "number") trackingStrength.value = String(s.trackingStrength);
-    if (typeof s.identityThreshold === "number") identityThreshold.value = String(s.identityThreshold);
-    if (typeof s.stability === "number") stability.value = String(s.stability);
+    reframeSettingsCache = s && typeof s === "object" ? s : { engineSettings: {} };
     if (typeof s.encoder === "string") encoder.value = s.encoder;
     if (typeof s.trackingEngine === "string" && trackingEngine) trackingEngine.value = s.trackingEngine;
     if (typeof s.targetFacePath === "string" && s.targetFacePath.trim()) {
       targetFacePath.value = s.targetFacePath;
     }
+    currentEngineKey = getSelectedEngine();
+    const legacySettings =
+      typeof s.trackingStrength === "number" ||
+      typeof s.identityThreshold === "number" ||
+      typeof s.stability === "number"
+        ? {
+            trackingStrength:
+              typeof s.trackingStrength === "number"
+                ? s.trackingStrength
+                : getEnginePreset(currentEngineKey).trackingStrength,
+            identityThreshold:
+              typeof s.identityThreshold === "number"
+                ? s.identityThreshold
+                : getEnginePreset(currentEngineKey).identityThreshold,
+            stability:
+              typeof s.stability === "number"
+                ? s.stability
+                : getEnginePreset(currentEngineKey).stability,
+          }
+        : null;
+    const engineSettings = reframeSettingsCache.engineSettings || {};
+    const selectedSettings = engineSettings[currentEngineKey] || legacySettings || getEnginePreset(currentEngineKey);
+    reframeSettingsCache.engineSettings = engineSettings;
+    applyEngineSettings(currentEngineKey, selectedSettings, false);
   } catch {
-    // ignore broken local settings
+    currentEngineKey = getSelectedEngine();
+    applyEngineSettings(currentEngineKey, getEnginePreset(currentEngineKey), false);
   }
 }
 
 function saveSettings() {
+  const engine = getSelectedEngine();
+  const engineSettings = reframeSettingsCache.engineSettings || {};
+  engineSettings[engine] = captureCurrentEngineSettings();
   const payload = {
-    trackingStrength: Number(trackingStrength.value),
-    identityThreshold: Number(identityThreshold.value),
-    stability: Number(stability.value),
     encoder: encoder.value,
-    trackingEngine: trackingEngine ? trackingEngine.value : "faceIdentity",
+    trackingEngine: engine,
     targetFacePath: targetFacePath.value.trim(),
+    engineSettings,
   };
+  reframeSettingsCache = payload;
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
+}
+
+function handleTrackingEngineChange() {
+  const nextEngine = getSelectedEngine();
+  const engineSettings = reframeSettingsCache.engineSettings || {};
+  engineSettings[currentEngineKey] = captureCurrentEngineSettings();
+  const nextSettings = engineSettings[nextEngine] || getEnginePreset(nextEngine);
+  reframeSettingsCache.engineSettings = engineSettings;
+  currentEngineKey = nextEngine;
+  applyEngineSettings(nextEngine, nextSettings, true);
+  printStatus(
+    `Tracking engine preset loaded: ${nextEngine} | tracking=${Number(nextSettings.trackingStrength).toFixed(2)} id=${Number(nextSettings.identityThreshold).toFixed(2)} stability=${Number(nextSettings.stability).toFixed(2)}`
+  );
 }
 
 async function invoke(cmd, payload) {
@@ -228,12 +308,14 @@ async function startReframeRender(preview) {
     printStatus(String(e));
   }
 }
+
 loadSettings();
 bindSlider(trackingStrength, trackingStrengthValue);
 bindSlider(identityThreshold, identityThresholdValue);
 bindSlider(stability, stabilityValue);
+syncSliderLabels();
 encoder.addEventListener("change", saveSettings);
-if (trackingEngine) trackingEngine.addEventListener("change", saveSettings);
+if (trackingEngine) trackingEngine.addEventListener("change", handleTrackingEngineChange);
 
 $("verifyBtn").addEventListener("click", verifyTools);
 
@@ -324,11 +406,3 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
-
-
-
-
-
-
-
-
