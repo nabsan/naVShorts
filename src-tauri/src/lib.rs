@@ -12,7 +12,7 @@ use core::{
     dynamic_loop_zoom_envelope, normalize_beat_map, BeatPoint,
 };
 use media::{
-    build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points,
+    build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points, estimate_person_bytetrack_arcface_points, estimate_person_track_points,
     ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, score_face_folder_with_onnx_python, tool_version_line, verify_onnx_assets,
 };
 use rfd::FileDialog;
@@ -130,6 +130,14 @@ pub enum VideoEncoder {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum ReframeTrackingEngine {
+    FaceIdentity,
+    YoloDeepsortPerson,
+    YoloBytetrackArcface,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReframeRenderRequest {
     pub input_path: String,
     pub output_path: String,
@@ -142,6 +150,8 @@ pub struct ReframeRenderRequest {
     pub identity_threshold: f64,
     #[serde(default = "default_stability")]
     pub stability: f64,
+    #[serde(default = "default_reframe_tracking_engine")]
+    pub tracking_engine: ReframeTrackingEngine,
 }
 
 fn default_tracking_strength() -> f64 {
@@ -154,6 +164,10 @@ fn default_identity_threshold() -> f64 {
 
 fn default_stability() -> f64 {
     0.68
+}
+
+fn default_reframe_tracking_engine() -> ReframeTrackingEngine {
+    ReframeTrackingEngine::FaceIdentity
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,6 +505,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
     let identity_threshold = request.identity_threshold.clamp(0.0, 1.0);
     let stability = request.stability.clamp(0.0, 1.0);
     let target_face_path = request.target_face_path.clone();
+    let tracking_engine = request.tracking_engine.clone();
 
     std::thread::spawn(move || {
         let started_at = SystemTime::now();
@@ -599,39 +614,99 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
         height_for_log = out_height;
 
         let mut track_points = Vec::new();
-        if let Some(face_path_raw) = target_face_path.as_ref() {
-            let face_path_trim = face_path_raw.trim();
-            if !face_path_trim.is_empty() {
-                let face_path = PathBuf::from(face_path_trim);
-                if face_path.exists() {
-                    if let Ok(mut s) = status.lock() {
-                        s.progress = 0.16;
-                        s.message = format!(
-                            "Analyzing face track points... (strength={:.2}, id={:.2}, stab={:.2})",
-                            tracking_strength, identity_threshold, stability
-                        );
-                    }
-                    track_points = match estimate_face_track_points(
-                        &ffmpeg,
-                        &input_path,
-                        &face_path,
-                        info.width,
-                        info.height,
-                        tracking_strength,
-                        identity_threshold,
-                        stability,
-                    ) {
-                        Ok(v) => v,
-                        Err(err) => {
+        match tracking_engine {
+            ReframeTrackingEngine::FaceIdentity => {
+                if let Some(face_path_raw) = target_face_path.as_ref() {
+                    let face_path_trim = face_path_raw.trim();
+                    if !face_path_trim.is_empty() {
+                        let face_path = PathBuf::from(face_path_trim);
+                        if face_path.exists() {
                             if let Ok(mut s) = status.lock() {
-                                s.state = RenderState::Failed;
-                                s.progress = 0.0;
-                                s.message = format!("face tracking analysis failed: {err:#}");
+                                s.progress = 0.16;
+                                s.message = format!(
+                                    "Analyzing face track points... (strength={:.2}, id={:.2}, stab={:.2})",
+                                    tracking_strength, identity_threshold, stability
+                                );
                             }
-                            return;
+                            track_points = match estimate_face_track_points(
+                                &ffmpeg,
+                                &input_path,
+                                &face_path,
+                                info.width,
+                                info.height,
+                                tracking_strength,
+                                identity_threshold,
+                                stability,
+                            ) {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    if let Ok(mut s) = status.lock() {
+                                        s.state = RenderState::Failed;
+                                        s.progress = 0.0;
+                                        s.message = format!("face tracking analysis failed: {err:#}");
+                                    }
+                                    return;
+                                }
+                            };
                         }
-                    };
+                    }
                 }
+            }
+            ReframeTrackingEngine::YoloDeepsortPerson => {
+                if let Ok(mut s) = status.lock() {
+                    s.progress = 0.16;
+                    s.message = format!(
+                        "Analyzing person track points (YOLO+DeepSORT)... (strength={:.2}, stab={:.2})",
+                        tracking_strength, stability
+                    );
+                }
+                track_points = match estimate_person_track_points(
+                    &input_path,
+                    info.width,
+                    info.height,
+                    tracking_strength,
+                    stability,
+                    target_face_path.as_ref().map(Path::new),
+                    identity_threshold,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        if let Ok(mut s) = status.lock() {
+                            s.state = RenderState::Failed;
+                            s.progress = 0.0;
+                            s.message = format!("person tracking analysis failed: {err:#}");
+                        }
+                        return;
+                    }
+                };
+            }
+            ReframeTrackingEngine::YoloBytetrackArcface => {
+                if let Ok(mut s) = status.lock() {
+                    s.progress = 0.16;
+                    s.message = format!(
+                        "Analyzing person track points (YOLO+ByteTrack+ArcFace)... (strength={:.2}, id={:.2}, stab={:.2})",
+                        tracking_strength, identity_threshold, stability
+                    );
+                }
+                track_points = match estimate_person_bytetrack_arcface_points(
+                    &input_path,
+                    info.width,
+                    info.height,
+                    tracking_strength,
+                    stability,
+                    target_face_path.as_ref().map(Path::new),
+                    identity_threshold,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        if let Ok(mut s) = status.lock() {
+                            s.state = RenderState::Failed;
+                            s.progress = 0.0;
+                            s.message = format!("person tracking analysis failed: {err:#}");
+                        }
+                        return;
+                    }
+                };
             }
         }
         beat_points_for_log = track_points.len();
@@ -645,7 +720,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                 )
             } else {
                 format!(
-                    "Preparing FFmpeg filtergraph ({}x{}, face points={})...",
+                    "Preparing FFmpeg filtergraph ({}x{}, track points={})...",
                     out_width,
                     out_height,
                     track_points.len()
@@ -696,13 +771,14 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                         format!("Reframe completed (center, {}x{})", out_width, out_height)
                     } else {
                         format!(
-                            "Reframe completed ({}x{}, face tracked, points={}, strength={:.2}, id={:.2}, stab={:.2})",
+                            "Reframe completed ({}x{}, tracked, points={}, strength={:.2}, id={:.2}, stab={:.2}, engine={:?})",
                             out_width,
                             out_height,
                             track_points.len(),
                             tracking_strength,
                             identity_threshold,
-                            stability
+                            stability,
+                            tracking_engine
                         )
                     };
                     s.output_path = Some(output_path.clone());
@@ -1149,6 +1225,14 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
+
+
+
+
 
 
 

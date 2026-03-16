@@ -42,6 +42,15 @@
         <button id="pickTargetFaceBtn" class="secondary">Select Target Face Folder</button>
       </div>
 
+
+      <div class="fieldRow fieldRow2">
+        <label for="trackingEngine" class="inlineLabel">Tracking engine</label>
+        <select id="trackingEngine">
+          <option value="faceIdentity" selected>Face Identity (ONNX)</option>
+          <option value="yoloDeepsortPerson">Person YOLO + DeepSORT</option>
+          <option value="yoloBytetrackArcface">Person YOLO + ByteTrack + ArcFace</option>
+        </select>
+      </div>
       <div class="row">
         <button id="scoreFaceFolderBtn" class="secondary">Score Face Folder</button>
         <button id="moveExcludedBtn" class="secondary">Score + Move Excluded (botu)</button>
@@ -102,6 +111,10 @@
     </section>
   </main>
 
-  <script type="module" src="./reframe.js?v=20260312-5"></script>
+  <script type="module" src="./reframe.js?v=20260313-1"></script>
 </body>
 </html>
+
+
+
+

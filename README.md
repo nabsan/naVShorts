@@ -1,4 +1,4 @@
-﻿# naVShorts (Windows)
+# naVShorts (Windows)
 
 Windows desktop app for vertical social videos.
 Built with **Tauri + Rust + FFmpeg**.
@@ -9,7 +9,11 @@ Built with **Tauri + Rust + FFmpeg**.
 
 ## Main Features
 - Horizontal-to-vertical 9:16 conversion.
-- Face-reference tracking (target face folder).
+- Face-reference tracking with a target face folder.
+- Multiple reframe tracking engines:
+- `Face Identity (ONNX)`
+- `Person YOLO + DeepSORT`
+- `Person YOLO + ByteTrack + ArcFace`
 - Effects (zoom / beat bounce / motion blur).
 - Progress + ETA during render.
 - Export log (`.json`) and filter script (`.filter_script.txt`) next to output.
@@ -19,7 +23,7 @@ Built with **Tauri + Rust + FFmpeg**.
 - App branding shows `naVShorts` and custom icon.
 - Last-used values are remembered and restored on next launch.
 - Effects settings persisted: zoom mode/strength, bounce, beat sensitivity, motion blur, preset, encoder.
-- Reframe settings persisted: tracking strength, identity threshold, stability, encoder.
+- Reframe settings persisted: tracking strength, identity threshold, stability, encoder, tracking engine.
 - Status panel is fixed-size with internal scroll to avoid layout break on long logs.
 
 ## Reframe Quality (Current)
@@ -71,6 +75,16 @@ Place under:
 - URL: https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface
 - Original filename used: `arcfaceresnet100-8.onnx`
 - Local filename required by app: `arcface.onnx`
+- These ONNX files are used by `Face Identity (ONNX)` and `Person YOLO + ByteTrack + ArcFace`.
+
+### YOLO model file (auto-downloaded, NOT pushed)
+- Runtime model used by person tracking: `src-tauri/yolov8n.pt`
+- Source: Ultralytics default `yolov8n.pt` download on first run.
+- If missing, Ultralytics downloads it automatically when a YOLO tracking mode runs.
+
+### Ultralytics runtime cache (NOT pushed)
+- Folder: `Ultralytics/`
+- Purpose: runtime settings/cache generated locally by Ultralytics.
 
 ## Development
 ```powershell
@@ -79,18 +93,20 @@ npm.cmd run tauri dev
 ```
 
 ## Recent Updates
-- Reframe render startup no longer appears frozen:
+- Reframe render startup no longer appears frozen.
 - `render_reframe` now returns a job immediately and updates staged status messages (`Starting pipeline`, `Reading metadata`, `Detecting encoders`, `Analyzing face track`, `Preparing filtergraph`, `Starting FFmpeg render`).
-- Added face folder scoring workflow:
+- Added face folder scoring workflow.
 - `Score Face Folder` for ONNX-based quality scoring.
 - `Score + Move Excluded (botu)` to move exclude-recommended images into sibling `botu` folder, with move logs shown in `Status`.
-- UI compact layout updates (both workspaces):
+- UI compact layout updates in both workspaces.
 - `Verify FFmpeg` button placed at top.
 - Forms use horizontal rows for `label + input` and `label + input + button` to reduce vertical height.
 - Sliders remain horizontal as `label | value | slider`.
-- Identity tracking was strengthened with multi-reference matching:
+- Identity tracking was strengthened with multi-reference matching.
 - Target identity now uses a profile score (`prototype + max + top-k mean`) instead of simple single-mean cosine.
 - Added hysteresis gating (`enter threshold` / `keep threshold`) to reduce ID flapping.
 - Added motion-consistency scoring (IoU bonus + distance penalty to previous tracked box).
 - Added temporary loss tolerance (`max_lost_frames`) to avoid frequent relock jitter.
-- `tracking_strength` and `stability` are now forwarded to ONNX identity tracking process.
+- `tracking_strength` and `stability` are now forwarded to the ONNX identity tracking process.
+- Added new reframe tracking engine: `Person YOLO + ByteTrack + ArcFace`.
+- This mode uses YOLO person detection, ByteTrack temporal track IDs, and ArcFace face matching against `target face folder path`.

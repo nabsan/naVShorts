@@ -89,7 +89,20 @@ pub fn verify_onnx_assets() -> Vec<String> {
         out.push("identity_track_script=MISSING".to_string());
     }
 
+    if let Some(s) = find_person_track_script() {
+        out.push(format!("person_track_script=OK:{}", s.display()));
+    } else {
+        out.push("person_track_script=MISSING".to_string());
+    }
+
+    if let Some(s) = find_person_bytetrack_script() {
+        out.push(format!("person_bytetrack_script=OK:{}", s.display()));
+    } else {
+        out.push("person_bytetrack_script=MISSING".to_string());
+    }
+
     out.push(verify_python_identity_stack());
+    out.push(verify_python_person_stack());
 
     let detector_name = "face_detector.onnx";
     let arcface_name = "arcface.onnx";
@@ -195,6 +208,26 @@ fn verify_python_identity_stack() -> String {
         Err(e) => format!("python_identity_stack=ERR:{e}"),
     }
 }
+
+fn verify_python_person_stack() -> String {
+    let script = "import importlib.util;mods=['ultralytics','deep_sort_realtime'];print(','.join([m+':'+('OK' if importlib.util.find_spec(m) else 'MISSING') for m in mods]))";
+    let out = Command::new("python")
+        .arg("-c")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { "python_person_stack=UNKNOWN".to_string() } else { format!("python_person_stack={s}") }
+        }
+        Ok(o) => format!("python_person_stack=ERR:{}", String::from_utf8_lossy(&o.stderr).trim()),
+        Err(e) => format!("python_person_stack=ERR:{e}"),
+    }
+}
+
 fn find_score_face_script() -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -265,6 +298,41 @@ fn find_identity_track_script() -> Option<PathBuf> {
     if let Ok(exe) = env::current_exe() {
         if let Some(base) = exe.parent() {
             candidates.push(base.join("resources").join("scripts").join("identity_track.py"));
+        }
+    }
+
+    candidates.into_iter().find(|p| p.exists())
+}
+
+
+fn find_person_track_script() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("scripts").join("person_track.py"));
+        candidates.push(cwd.join("scripts").join("person_track.py"));
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        if let Some(base) = exe.parent() {
+            candidates.push(base.join("resources").join("scripts").join("person_track.py"));
+        }
+    }
+
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn find_person_bytetrack_script() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("scripts").join("person_bytetrack_arcface.py"));
+        candidates.push(cwd.join("scripts").join("person_bytetrack_arcface.py"));
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        if let Some(base) = exe.parent() {
+            candidates.push(base.join("resources").join("scripts").join("person_bytetrack_arcface.py"));
         }
     }
 
@@ -1361,6 +1429,221 @@ fn smooth_track_points(points: &[ReframeTrackPoint], alpha: f64) -> Vec<ReframeT
     out
 }
 
+fn track_person_with_yolo_deepsort_python(
+    input_video: &Path,
+    sample_width: u32,
+    sample_fps: f64,
+    tracking_strength: f64,
+    stability: f64,
+    target_face_ref: Option<&Path>,
+    identity_threshold: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    let script = find_person_track_script().ok_or_else(|| anyhow!("person_track.py not found"))?;
+
+    let mut command = Command::new("python");
+    command
+        .arg(script)
+        .arg("--video")
+        .arg(input_video)
+        .arg("--sample-width")
+        .arg(sample_width.to_string())
+        .arg("--sample-fps")
+        .arg(format!("{sample_fps:.4}"))
+        .arg("--tracking-strength")
+        .arg(format!("{tracking_strength:.4}"))
+        .arg("--stability")
+        .arg(format!("{stability:.4}"));
+
+    if let Some(face_ref) = target_face_ref {
+        let model_dir = find_model_dir().ok_or_else(|| anyhow!("onnx model dir not found"))?;
+        let detector = model_dir.join("face_detector.onnx");
+        let arcface = model_dir.join("arcface.onnx");
+        if !detector.exists() || !arcface.exists() {
+            return Err(anyhow!(
+                "onnx models missing for person identity matching (detector={}, arcface={})",
+                detector.display(),
+                arcface.display()
+            ));
+        }
+        if face_ref.is_dir() {
+            command.arg("--target-dir").arg(face_ref);
+        } else {
+            command.arg("--target").arg(face_ref);
+        }
+        command
+            .arg("--detector")
+            .arg(detector)
+            .arg("--arcface")
+            .arg(arcface)
+            .arg("--identity-threshold")
+            .arg(format!("{:.4}", identity_threshold.clamp(0.0, 1.0)));
+    }
+
+    let output = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to start person_track.py")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "person_track.py failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let parsed: IdentityTrackOutput = serde_json::from_slice(&output.stdout)
+        .context("person_track.py returned invalid json")?;
+
+    let mut out = Vec::with_capacity(parsed.points.len());
+    for p in parsed.points {
+        out.push(ReframeTrackPoint {
+            time_sec: p.time_sec,
+            center_x_ratio: p.center_x_ratio.clamp(0.1, 0.9),
+        });
+    }
+    Ok(out)
+}
+
+fn track_person_with_yolo_bytetrack_arcface_python(
+    input_video: &Path,
+    sample_width: u32,
+    sample_fps: f64,
+    tracking_strength: f64,
+    stability: f64,
+    target_face_ref: &Path,
+    identity_threshold: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    let script = find_person_bytetrack_script().ok_or_else(|| anyhow!("person_bytetrack_arcface.py not found"))?;
+    let model_dir = find_model_dir().ok_or_else(|| anyhow!("onnx model dir not found"))?;
+    let detector = model_dir.join("face_detector.onnx");
+    let arcface = model_dir.join("arcface.onnx");
+    if !detector.exists() || !arcface.exists() {
+        return Err(anyhow!(
+            "onnx models missing for person identity matching (detector={}, arcface={})",
+            detector.display(),
+            arcface.display()
+        ));
+    }
+
+    let mut command = Command::new("python");
+    command
+        .arg(script)
+        .arg("--video")
+        .arg(input_video)
+        .arg("--sample-width")
+        .arg(sample_width.to_string())
+        .arg("--sample-fps")
+        .arg(format!("{sample_fps:.4}"))
+        .arg("--tracking-strength")
+        .arg(format!("{tracking_strength:.4}"))
+        .arg("--stability")
+        .arg(format!("{stability:.4}"));
+
+    if target_face_ref.is_dir() {
+        command.arg("--target-dir").arg(target_face_ref);
+    } else {
+        command.arg("--target").arg(target_face_ref);
+    }
+
+    let output = command
+        .arg("--detector")
+        .arg(detector)
+        .arg("--arcface")
+        .arg(arcface)
+        .arg("--identity-threshold")
+        .arg(format!("{:.4}", identity_threshold.clamp(0.0, 1.0)))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to start person_bytetrack_arcface.py")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "person_bytetrack_arcface.py failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let parsed: IdentityTrackOutput = serde_json::from_slice(&output.stdout)
+        .context("person_bytetrack_arcface.py returned invalid json")?;
+
+    let mut out = Vec::with_capacity(parsed.points.len());
+    for p in parsed.points {
+        out.push(ReframeTrackPoint {
+            time_sec: p.time_sec,
+            center_x_ratio: p.center_x_ratio.clamp(0.1, 0.9),
+        });
+    }
+    Ok(out)
+}
+
+pub fn estimate_person_bytetrack_arcface_points(
+    input_video: &Path,
+    _source_width: u32,
+    _source_height: u32,
+    tracking_strength: f64,
+    stability: f64,
+    target_face_ref: Option<&Path>,
+    identity_threshold: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    let target_face_ref = target_face_ref.ok_or_else(|| anyhow!("target face folder is required for YOLO+ByteTrack+ArcFace"))?;
+    let s = tracking_strength.clamp(0.0, 1.0);
+    let stab = stability.clamp(0.0, 1.0);
+    let sample_width = ((512.0 + 320.0 * s).round() as u32).clamp(512, 896);
+    let sample_fps = 3.0 + (5.0 * s);
+    let max_points = (80.0 + 120.0 * s).round() as usize;
+    let alpha = (0.60 - 0.50 * stab).clamp(0.08, 0.72);
+
+    let points = track_person_with_yolo_bytetrack_arcface_python(
+        input_video,
+        sample_width,
+        sample_fps,
+        s,
+        stab,
+        target_face_ref,
+        identity_threshold,
+    )?;
+
+    if points.len() < 6 {
+        return Err(anyhow!("YOLO+ByteTrack+ArcFace returned too few points"));
+    }
+
+    Ok(compress_track_points(&points, max_points, alpha, stab))
+}
+pub fn estimate_person_track_points(
+    input_video: &Path,
+    _source_width: u32,
+    _source_height: u32,
+    tracking_strength: f64,
+    stability: f64,
+    target_face_ref: Option<&Path>,
+    identity_threshold: f64,
+) -> Result<Vec<ReframeTrackPoint>> {
+    let s = tracking_strength.clamp(0.0, 1.0);
+    let stab = stability.clamp(0.0, 1.0);
+    let sample_width = ((384.0 + 256.0 * s).round() as u32).clamp(384, 768);
+    let sample_fps = 3.0 + (5.0 * s);
+    let max_points = (80.0 + 120.0 * s).round() as usize;
+    let alpha = (0.60 - 0.50 * stab).clamp(0.08, 0.72);
+
+    let points = track_person_with_yolo_deepsort_python(
+        input_video,
+        sample_width,
+        sample_fps,
+        s,
+        stab,
+        target_face_ref,
+        identity_threshold,
+    )?;
+
+    if points.len() < 6 {
+        return Err(anyhow!("YOLO+DeepSORT returned too few points"));
+    }
+
+    Ok(compress_track_points(&points, max_points, alpha, stab))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1422,6 +1705,11 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
+
+
+
 
 
 

@@ -24,6 +24,7 @@ const scoreFaceFolderBtn = $("scoreFaceFolderBtn");
 const moveExcludedBtn = $("moveExcludedBtn");
 const reframeOutputPath = $("reframeOutputPath");
 const encoder = $("encoder");
+const trackingEngine = $("trackingEngine");
 const trackingStrength = $("trackingStrength");
 const trackingStrengthValue = $("trackingStrengthValue");
 const identityThreshold = $("identityThreshold");
@@ -104,6 +105,7 @@ function loadSettings() {
     if (typeof s.identityThreshold === "number") identityThreshold.value = String(s.identityThreshold);
     if (typeof s.stability === "number") stability.value = String(s.stability);
     if (typeof s.encoder === "string") encoder.value = s.encoder;
+    if (typeof s.trackingEngine === "string" && trackingEngine) trackingEngine.value = s.trackingEngine;
     if (typeof s.targetFacePath === "string" && s.targetFacePath.trim()) {
       targetFacePath.value = s.targetFacePath;
     }
@@ -118,6 +120,7 @@ function saveSettings() {
     identityThreshold: Number(identityThreshold.value),
     stability: Number(stability.value),
     encoder: encoder.value,
+    trackingEngine: trackingEngine ? trackingEngine.value : "faceIdentity",
     targetFacePath: targetFacePath.value.trim(),
   };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
@@ -211,6 +214,7 @@ async function startReframeRender(preview) {
         trackingStrength: Number.isFinite(tracking) ? tracking : 0.72,
         identityThreshold: Number.isFinite(idThr) ? idThr : 0.58,
         stability: Number.isFinite(stab) ? stab : 0.68,
+        trackingEngine: trackingEngine ? trackingEngine.value : "faceIdentity",
       },
     });
 
@@ -218,18 +222,18 @@ async function startReframeRender(preview) {
     if (status && status.state === "completed") {
       lastOutput = out;
       const faceRef = face || "(none)";
-      printStatus(`Reframe complete. Face reference: ${faceRef} | tracking=${tracking.toFixed(2)} id=${idThr.toFixed(2)} stability=${stab.toFixed(2)}`);
+      printStatus(`Reframe complete. Face reference: ${faceRef} | tracking=${tracking.toFixed(2)} id=${idThr.toFixed(2)} stability=${stab.toFixed(2)} engine=${trackingEngine ? trackingEngine.value : "faceIdentity"}`);
     }
   } catch (e) {
     printStatus(String(e));
   }
 }
-
 loadSettings();
 bindSlider(trackingStrength, trackingStrengthValue);
 bindSlider(identityThreshold, identityThresholdValue);
 bindSlider(stability, stabilityValue);
 encoder.addEventListener("change", saveSettings);
+if (trackingEngine) trackingEngine.addEventListener("change", saveSettings);
 
 $("verifyBtn").addEventListener("click", verifyTools);
 
@@ -320,6 +324,10 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
+
+
+
+
 
 
 

@@ -4,3 +4,6 @@
 *.log
 /src-tauri/resources/models/*.onnx
 /src-tauri/resources/models/**/*.onnx
+/Ultralytics/
+/src-tauri/scripts/__pycache__/
+/src-tauri/*.pt
