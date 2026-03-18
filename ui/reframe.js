@@ -14,17 +14,20 @@
 const tauriInvoke = resolveInvoke();
 const $ = (id) => document.getElementById(id);
 
-const SETTINGS_KEY = "naVShorts.reframe.v1";
+const SETTINGS_KEY = "naVShorts.reframe.v2";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
 const ENGINE_PRESETS = {
   faceIdentity: { trackingStrength: 0.78, identityThreshold: 0.58, stability: 0.76 },
   yoloDeepsortPerson: { trackingStrength: 0.80, identityThreshold: 0.60, stability: 0.74 },
   yoloBytetrackArcface: { trackingStrength: 0.84, identityThreshold: 0.66, stability: 0.82 },
+  manualAssistJson: { trackingStrength: 0.72, identityThreshold: 0.58, stability: 0.84 },
 };
 
 const sourceVideoPath = $("sourceVideoPath");
 const targetFacePath = $("targetFacePath");
+const assistJsonPath = $("assistJsonPath");
 const pickTargetFaceBtn = $("pickTargetFaceBtn");
+const pickAssistJsonBtn = $("pickAssistJsonBtn");
 const scoreFaceFolderBtn = $("scoreFaceFolderBtn");
 const moveExcludedBtn = $("moveExcludedBtn");
 const reframeOutputPath = $("reframeOutputPath");
@@ -76,16 +79,11 @@ function printProject(data) {
 }
 
 function printStatus(textOrObject) {
-  statusInfo.textContent =
-    typeof textOrObject === "string"
-      ? textOrObject
-      : JSON.stringify(textOrObject, null, 2);
+  statusInfo.textContent = typeof textOrObject === "string" ? textOrObject : JSON.stringify(textOrObject, null, 2);
 }
 
 function setProgress(progress, etaText) {
-  renderProgress.value = Number.isFinite(progress)
-    ? Math.min(Math.max(progress, 0), 1)
-    : 0;
+  renderProgress.value = Number.isFinite(progress) ? Math.min(Math.max(progress, 0), 1) : 0;
   etaInfo.textContent = etaText;
 }
 
@@ -111,12 +109,24 @@ function captureCurrentEngineSettings() {
   };
 }
 
+function updateTrackingEngineUi() {
+  const engine = getSelectedEngine();
+  const manual = engine === "manualAssistJson";
+  if (targetFacePath) targetFacePath.disabled = manual;
+  if (pickTargetFaceBtn) pickTargetFaceBtn.disabled = manual;
+  if (scoreFaceFolderBtn) scoreFaceFolderBtn.disabled = manual;
+  if (moveExcludedBtn) moveExcludedBtn.disabled = manual;
+  if (assistJsonPath) assistJsonPath.disabled = !manual;
+  if (pickAssistJsonBtn) pickAssistJsonBtn.disabled = !manual;
+}
+
 function applyEngineSettings(engine, settings, persist = false) {
   const next = settings || getEnginePreset(engine);
   trackingStrength.value = String(next.trackingStrength);
   identityThreshold.value = String(next.identityThreshold);
   stability.value = String(next.stability);
   syncSliderLabels();
+  updateTrackingEngineUi();
   if (persist) saveSettings();
 }
 
@@ -146,31 +156,11 @@ function loadSettings() {
     reframeSettingsCache = s && typeof s === "object" ? s : { engineSettings: {} };
     if (typeof s.encoder === "string") encoder.value = s.encoder;
     if (typeof s.trackingEngine === "string" && trackingEngine) trackingEngine.value = s.trackingEngine;
-    if (typeof s.targetFacePath === "string" && s.targetFacePath.trim()) {
-      targetFacePath.value = s.targetFacePath;
-    }
+    if (typeof s.targetFacePath === "string" && s.targetFacePath.trim()) targetFacePath.value = s.targetFacePath;
+    if (typeof s.assistJsonPath === "string" && s.assistJsonPath.trim()) assistJsonPath.value = s.assistJsonPath;
     currentEngineKey = getSelectedEngine();
-    const legacySettings =
-      typeof s.trackingStrength === "number" ||
-      typeof s.identityThreshold === "number" ||
-      typeof s.stability === "number"
-        ? {
-            trackingStrength:
-              typeof s.trackingStrength === "number"
-                ? s.trackingStrength
-                : getEnginePreset(currentEngineKey).trackingStrength,
-            identityThreshold:
-              typeof s.identityThreshold === "number"
-                ? s.identityThreshold
-                : getEnginePreset(currentEngineKey).identityThreshold,
-            stability:
-              typeof s.stability === "number"
-                ? s.stability
-                : getEnginePreset(currentEngineKey).stability,
-          }
-        : null;
     const engineSettings = reframeSettingsCache.engineSettings || {};
-    const selectedSettings = engineSettings[currentEngineKey] || legacySettings || getEnginePreset(currentEngineKey);
+    const selectedSettings = engineSettings[currentEngineKey] || getEnginePreset(currentEngineKey);
     reframeSettingsCache.engineSettings = engineSettings;
     applyEngineSettings(currentEngineKey, selectedSettings, false);
   } catch {
@@ -187,6 +177,7 @@ function saveSettings() {
     encoder: encoder.value,
     trackingEngine: engine,
     targetFacePath: targetFacePath.value.trim(),
+    assistJsonPath: assistJsonPath.value.trim(),
     engineSettings,
   };
   reframeSettingsCache = payload;
@@ -271,9 +262,11 @@ async function startReframeRender(preview) {
     const input = sourceVideoPath.value.trim();
     const out = reframeOutputPath.value.trim();
     const face = targetFacePath.value.trim();
+    const assistJson = assistJsonPath.value.trim();
     const tracking = Number(trackingStrength?.value ?? 0.72);
     const idThr = Number(identityThreshold?.value ?? 0.58);
     const stab = Number(stability?.value ?? 0.68);
+    const engine = trackingEngine ? trackingEngine.value : "faceIdentity";
 
     if (!input) {
       printStatus("Source video path is empty.");
@@ -283,26 +276,31 @@ async function startReframeRender(preview) {
       printStatus("Reframe output path is empty.");
       return;
     }
+    if (engine === "manualAssistJson" && !assistJson) {
+      printStatus("Assist JSON path is empty.");
+      return;
+    }
 
     const jobId = await invoke("render_reframe", {
       request: {
         inputPath: input,
         outputPath: out,
         targetFacePath: face || null,
+        assistJsonPath: assistJson || null,
         preview,
         encoder: encoder.value,
         trackingStrength: Number.isFinite(tracking) ? tracking : 0.72,
         identityThreshold: Number.isFinite(idThr) ? idThr : 0.58,
         stability: Number.isFinite(stab) ? stab : 0.68,
-        trackingEngine: trackingEngine ? trackingEngine.value : "faceIdentity",
+        trackingEngine: engine,
       },
     });
 
     const status = await trackRenderJob(jobId);
     if (status && status.state === "completed") {
       lastOutput = out;
-      const faceRef = face || "(none)";
-      printStatus(`Reframe complete. Face reference: ${faceRef} | tracking=${tracking.toFixed(2)} id=${idThr.toFixed(2)} stability=${stab.toFixed(2)} engine=${trackingEngine ? trackingEngine.value : "faceIdentity"}`);
+      const sourceRef = engine === "manualAssistJson" ? assistJson : face || "(none)";
+      printStatus(`Reframe complete. Source reference: ${sourceRef} | tracking=${tracking.toFixed(2)} id=${idThr.toFixed(2)} stability=${stab.toFixed(2)} engine=${engine}`);
     }
   } catch (e) {
     printStatus(String(e));
@@ -314,6 +312,7 @@ bindSlider(trackingStrength, trackingStrengthValue);
 bindSlider(identityThreshold, identityThresholdValue);
 bindSlider(stability, stabilityValue);
 syncSliderLabels();
+updateTrackingEngineUi();
 encoder.addEventListener("change", saveSettings);
 if (trackingEngine) trackingEngine.addEventListener("change", handleTrackingEngineChange);
 
@@ -336,6 +335,29 @@ if (pickTargetFaceBtn) {
   });
 }
 
+if (pickAssistJsonBtn) {
+  pickAssistJsonBtn.addEventListener("click", async () => {
+    try {
+      const picked = await invoke("pick_json_file");
+      if (!picked) {
+        printStatus("Assist JSON selection cancelled.");
+        return;
+      }
+      assistJsonPath.value = picked;
+      const assistProject = await invoke("load_manual_assist_json", { path: picked });
+      if (typeof assistProject.targetFacePath === "string" && assistProject.targetFacePath.trim()) {
+        targetFacePath.value = assistProject.targetFacePath;
+      }
+      trackingEngine.value = "manualAssistJson";
+      handleTrackingEngineChange();
+      saveSettings();
+      printStatus("Assist JSON selected.");
+    } catch (e) {
+      printStatus(String(e));
+    }
+  });
+}
+
 if (scoreFaceFolderBtn) {
   scoreFaceFolderBtn.addEventListener("click", async () => {
     try {
@@ -352,6 +374,7 @@ if (scoreFaceFolderBtn) {
     }
   });
 }
+
 if (moveExcludedBtn) {
   moveExcludedBtn.addEventListener("click", async () => {
     try {
@@ -368,6 +391,7 @@ if (moveExcludedBtn) {
     }
   });
 }
+
 $("openSourceBtn").addEventListener("click", async () => {
   try {
     const picked = await invoke("pick_video_file");
@@ -399,6 +423,29 @@ $("sendToEffectsBtn").addEventListener("click", () => {
   window.location.href = u.toString();
 });
 
+const assistJsonFromUrl = new URLSearchParams(window.location.search).get("assistJson");
+if (assistJsonFromUrl) {
+  assistJsonPath.value = assistJsonFromUrl;
+  invoke("load_manual_assist_json", { path: assistJsonFromUrl })
+    .then((assistProject) => {
+      if (typeof assistProject.targetFacePath === "string" && assistProject.targetFacePath.trim()) {
+        targetFacePath.value = assistProject.targetFacePath;
+      }
+      if (trackingEngine) trackingEngine.value = "manualAssistJson";
+      currentEngineKey = "manualAssistJson";
+      applyEngineSettings(currentEngineKey, getEnginePreset(currentEngineKey), false);
+      saveSettings();
+      printStatus("Assist JSON received from Reframe Assist. Export from 1. Reframe when ready.");
+    })
+    .catch(() => {
+      if (trackingEngine) trackingEngine.value = "manualAssistJson";
+      currentEngineKey = "manualAssistJson";
+      applyEngineSettings(currentEngineKey, getEnginePreset(currentEngineKey), false);
+      saveSettings();
+      printStatus("Assist JSON received from Reframe Assist. Export from 1. Reframe when ready.");
+    });
+}
+
 if (!tauriInvoke) {
   printStatus("Tauri API not available");
 }
@@ -406,3 +453,4 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
+

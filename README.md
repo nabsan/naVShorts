@@ -1,72 +1,84 @@
-# naVShorts (Windows)
+﻿# naVShorts (Windows)
 
 Windows desktop app for vertical social videos.
 Built with **Tauri + Rust + FFmpeg**.
 
 ## Workflow
-- `1. Reframe` (first step, default startup tab)
-- `2. Effects` (second step)
+- `1. Reframe`: convert horizontal video to vertical 9:16 with tracking
+- `1B. Reframe Assist`: place manual face anchors, save Assist JSON, then reuse it in `1. Reframe`
+- `2. Effects`: add zoom / beat / motion effects and export final vertical video
 
 ## Main Features
-- Horizontal-to-vertical 9:16 conversion.
-- Face-reference tracking with a target face folder.
+- Horizontal-to-vertical `9:16` conversion.
+- Face-reference tracking with `target face folder path`.
 - Multiple reframe tracking engines:
-- `Face Identity (ONNX)`
-- `Person YOLO + DeepSORT`
-- `Person YOLO + ByteTrack + ArcFace`
-- Effects (zoom / beat bounce / motion blur).
+  - `Face Identity (ONNX)`
+  - `Person YOLO + DeepSORT`
+  - `Person YOLO + ByteTrack + ArcFace`
+  - `Manual Assist JSON`
+- `Reframe Assist` preview playback with manual rectangle anchors.
+- Hybrid assist tracking:
+  - manual anchors remain the base
+  - auto tracking can assist between anchors
+  - supported assist engines:
+    - `Manual only`
+    - `Assist with Face Identity (ONNX)`
+    - `Assist with YOLO + ByteTrack + ArcFace`
+    - `Assist with YOLO + DeepSORT`
+- Effects workspace:
+  - zoom modes
+  - beat bounce
+  - motion blur
 - Progress + ETA during render.
 - Export log (`.json`) and filter script (`.filter_script.txt`) next to output.
 
-## UI Notes
-- Top tabs clearly show active workspace.
-- App branding shows `naVShorts` and custom icon.
-- Last-used values are remembered and restored on next launch.
-- Effects settings persisted: zoom mode/strength, bounce, beat sensitivity, motion blur, preset, encoder.
-- Reframe settings persisted: tracking strength, identity threshold, stability, encoder, tracking engine.
-- Status panel is fixed-size with internal scroll to avoid layout break on long logs.
-
-## Reframe Quality (Current)
-- Preview: `540x960`
+## Reframe Quality
+- Assist preview playback uses a lightweight proxy video.
 - Final reframe output is automatic by source resolution:
-- 4K-class source (>=3000 width or >=1700 height): `2160x3840`
-- otherwise: `1080x1920`
-- Reframe encoder quality was raised for final output.
-- CPU x264: lower CRF + slower preset on HQ path.
-- NVIDIA/Intel/AMD: lower CQ/QP/quality values on HQ path.
+  - 4K-class source (`>=3000` width or `>=1700` height): `2160x3840`
+  - otherwise: `1080x1920`
+- Final encoder quality is tuned higher than preview.
 
-## Face Tracking Tuning Guide
-Recommended starting point:
-- `Face tracking strength`: `0.72`
-- `Stability`: `0.68`
-- `Identity threshold`: `0.58`
-
-Adjustment rules:
-1. Tracking is weak or often loses the target.
-- Increase `Face tracking strength` by `+0.05` steps (up to about `0.80-0.90`).
-2. Frame movement is too nervous or jittery.
-- Increase `Stability` by `+0.05` steps (up to about `0.75-0.85`).
-3. Tracking jumps to another person.
-- Increase `Identity threshold` by `+0.03` to `+0.05`.
-4. The face is missed too often.
-- Slightly decrease `Identity threshold`, or raise `Face tracking strength`.
-
-Practical preset for dance videos:
-- `tracking 0.78 / stability 0.76 / identity threshold 0.58`
-
+## Tracking Tuning Guide
 Recommended starting values by tracking engine:
 - `Face Identity (ONNX)`: `tracking 0.78 / id 0.58 / stability 0.76`
 - `Person YOLO + DeepSORT`: `tracking 0.80 / id 0.60 / stability 0.74`
 - `Person YOLO + ByteTrack + ArcFace`: `tracking 0.84 / id 0.66 / stability 0.82`
+- `Manual Assist JSON`: `tracking 0.72 / id 0.58 / stability 0.84`
 
-## Export Presets (Effects)
+Adjustment rules:
+1. Tracking is weak or loses the target often.
+- Increase `Face tracking strength` by `+0.05`.
+2. Movement is too nervous or jittery.
+- Increase `Stability` by `+0.05`.
+3. Tracking jumps to another person.
+- Increase `Identity threshold` by `+0.03` to `+0.05`.
+4. Face is missed too often.
+- Slightly lower `Identity threshold`, or raise `Face tracking strength`.
+
+## Reframe Assist Usage
+1. Open `1B. Reframe Assist`.
+2. Select the source video.
+3. Select `Target face folder path` if you want hybrid assist tracking.
+4. Choose `Assist tracking engine`.
+5. Play / pause the preview and place face rectangles only where tracking would drift.
+6. Save Assist JSON.
+7. Send Assist JSON to `1. Reframe`.
+8. In `1. Reframe`, keep `Tracking engine = Manual Assist JSON` and export.
+
+Notes:
+- Manual anchors are always respected.
+- Auto assist is blended mainly between anchors, so you only need to correct drift points.
+- If assist tracking fails, manual anchors still remain the fallback path.
+
+## Effects Export Presets
 - YouTube Shorts `1080x1920`
 - Instagram Reels `1080x1920`
 - Vertical 4K `2160x3840`
 
-## Large Model Files (NOT pushed)
+## Runtime Assets Not Pushed To Git
 ONNX files are excluded from git due GitHub size limits.
-Place under:
+Place them under:
 - `src-tauri/resources/models/`
 
 ### Face detector
@@ -80,16 +92,14 @@ Place under:
 - URL: https://github.com/onnx/models/tree/main/validated/vision/body_analysis/arcface
 - Original filename used: `arcfaceresnet100-8.onnx`
 - Local filename required by app: `arcface.onnx`
-- These ONNX files are used by `Face Identity (ONNX)` and `Person YOLO + ByteTrack + ArcFace`.
 
-### YOLO model file (auto-downloaded, NOT pushed)
-- Runtime model used by person tracking: `src-tauri/yolov8n.pt`
+### YOLO model file
+- Runtime model: `src-tauri/yolov8n.pt`
 - Source: Ultralytics default `yolov8n.pt` download on first run.
-- If missing, Ultralytics downloads it automatically when a YOLO tracking mode runs.
 
-### Ultralytics runtime cache (NOT pushed)
+### Ultralytics runtime cache
 - Folder: `Ultralytics/`
-- Purpose: runtime settings/cache generated locally by Ultralytics.
+- Purpose: local runtime cache/settings generated by Ultralytics.
 
 ## Development
 ```powershell
@@ -98,20 +108,9 @@ npm.cmd run tauri dev
 ```
 
 ## Recent Updates
-- Reframe render startup no longer appears frozen.
-- `render_reframe` now returns a job immediately and updates staged status messages (`Starting pipeline`, `Reading metadata`, `Detecting encoders`, `Analyzing face track`, `Preparing filtergraph`, `Starting FFmpeg render`).
-- Added face folder scoring workflow.
-- `Score Face Folder` for ONNX-based quality scoring.
-- `Score + Move Excluded (botu)` to move exclude-recommended images into sibling `botu` folder, with move logs shown in `Status`.
-- UI compact layout updates in both workspaces.
-- `Verify FFmpeg` button placed at top.
-- Forms use horizontal rows for `label + input` and `label + input + button` to reduce vertical height.
-- Sliders remain horizontal as `label | value | slider`.
-- Identity tracking was strengthened with multi-reference matching.
-- Target identity now uses a profile score (`prototype + max + top-k mean`) instead of simple single-mean cosine.
-- Added hysteresis gating (`enter threshold` / `keep threshold`) to reduce ID flapping.
-- Added motion-consistency scoring (IoU bonus + distance penalty to previous tracked box).
-- Added temporary loss tolerance (`max_lost_frames`) to avoid frequent relock jitter.
-- `tracking_strength` and `stability` are now forwarded to the ONNX identity tracking process.
-- Added new reframe tracking engine: `Person YOLO + ByteTrack + ArcFace`.
-- This mode uses YOLO person detection, ByteTrack temporal track IDs, and ArcFace face matching against `target face folder path`.
+- Added `1B. Reframe Assist` workspace.
+- Fixed Assist preview playback by using blob-based preview loading instead of direct `asset.localhost` playback.
+- Added Assist JSON save/load flow.
+- Added `Manual Assist JSON` tracking mode in `1. Reframe`.
+- Added hybrid assist tracking using `target face folder path` plus auto engines between manual anchors.
+- `1. Reframe` now auto-loads target face folder info from Assist JSON when available.

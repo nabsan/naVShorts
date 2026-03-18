@@ -2,6 +2,7 @@
 mod media;
 
 use std::collections::HashMap;
+use base64::Engine;
 use std::fs;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::path::{Path, PathBuf};
@@ -12,8 +13,8 @@ use core::{
     dynamic_loop_zoom_envelope, normalize_beat_map, BeatPoint,
 };
 use media::{
-    build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points, estimate_person_bytetrack_arcface_points, estimate_person_track_points,
-    ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, score_face_folder_with_onnx_python, tool_version_line, verify_onnx_assets,
+    build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points, estimate_manual_assist_track_points, estimate_person_bytetrack_arcface_points, estimate_person_track_points, finalize_reframe_track_points, ReframeTrackPoint,
+    create_preview_proxy, inspect_preview_proxy, ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, score_face_folder_with_onnx_python, tool_version_line, verify_onnx_assets,
 };
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -134,6 +135,7 @@ pub enum ReframeTrackingEngine {
     FaceIdentity,
     YoloDeepsortPerson,
     YoloBytetrackArcface,
+    ManualAssistJson,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +144,7 @@ pub struct ReframeRenderRequest {
     pub input_path: String,
     pub output_path: String,
     pub target_face_path: Option<String>,
+    pub assist_json_path: Option<String>,
     pub preview: bool,
     pub encoder: Option<VideoEncoder>,
     #[serde(default = "default_tracking_strength")]
@@ -168,6 +171,41 @@ fn default_stability() -> f64 {
 
 fn default_reframe_tracking_engine() -> ReframeTrackingEngine {
     ReframeTrackingEngine::FaceIdentity
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualAssistAnchor {
+    pub time_sec: f64,
+    pub center_x_ratio: f64,
+    pub rect_x_ratio: f64,
+    pub rect_y_ratio: f64,
+    pub rect_w_ratio: f64,
+    pub rect_h_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualReframeAssistRequest {
+    pub input_path: String,
+    pub output_path: String,
+    pub preview: bool,
+    pub encoder: Option<VideoEncoder>,
+    #[serde(default = "default_stability")]
+    pub stability: f64,
+    #[serde(default)]
+    pub anchors: Vec<ManualAssistAnchor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualAssistProject {
+    pub source_video: Option<String>,
+    #[serde(default)]
+    pub target_face_path: Option<String>,
+    #[serde(default)]
+    pub assist_tracking_engine: Option<String>,
+    pub anchors: Vec<ManualAssistAnchor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +273,51 @@ fn pick_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn pick_json_file() -> Result<Option<String>, String> {
+    let picked = FileDialog::new()
+        .add_filter("JSON", &["json"])
+        .pick_file();
+    Ok(picked.map(|p| p.display().to_string()))
+}
+
+fn load_manual_assist_project(path: &Path) -> Result<ManualAssistProject, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("failed to read assist json: {e}"))?;
+    serde_json::from_str::<ManualAssistProject>(&text).map_err(|e| format!("invalid assist json: {e}"))
+}
+
+#[tauri::command]
+fn save_manual_assist_json(
+    path: String,
+    source_video: Option<String>,
+    target_face_path: Option<String>,
+    assist_tracking_engine: Option<String>,
+    anchors: Vec<ManualAssistAnchor>,
+) -> Result<ManualAssistProject, String> {
+    let output = PathBuf::from(path.trim());
+    if output.as_os_str().is_empty() {
+        return Err("Assist JSON path is empty".to_string());
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("failed to create assist json directory: {e}"))?;
+        }
+    }
+    let project = ManualAssistProject { source_video, target_face_path, assist_tracking_engine, anchors };
+    let json = serde_json::to_string_pretty(&project).map_err(|e| format!("failed to serialize assist json: {e}"))?;
+    fs::write(&output, json).map_err(|e| format!("failed to write assist json: {e}"))?;
+    Ok(project)
+}
+
+#[tauri::command]
+fn load_manual_assist_json(path: String) -> Result<ManualAssistProject, String> {
+    let input = PathBuf::from(path.trim());
+    if input.as_os_str().is_empty() {
+        return Err("Assist JSON path is empty".to_string());
+    }
+    load_manual_assist_project(&input)
+}
+
+#[tauri::command]
 fn open_video(path: String, state: State<AppState>) -> Result<VideoInfo, String> {
     let input = PathBuf::from(&path);
     if !input.exists() {
@@ -250,6 +333,41 @@ fn open_video(path: String, state: State<AppState>) -> Result<VideoInfo, String>
     project.beat_map = None;
 
     Ok(info)
+}
+
+#[tauri::command]
+fn create_preview_video(path: String) -> Result<String, String> {
+    let input = PathBuf::from(path.trim());
+    if !input.exists() {
+        return Err(format!("Input file does not exist: {}", path));
+    }
+    let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
+    let preview = create_preview_proxy(&ffmpeg, &input).map_err(|e| format!("{e:#}"))?;
+    Ok(preview.display().to_string())
+}
+
+#[tauri::command]
+fn inspect_preview_video(path: String) -> Result<serde_json::Value, String> {
+    let input = PathBuf::from(path.trim());
+    if input.as_os_str().is_empty() {
+        return Err("Preview path is empty".to_string());
+    }
+    let ffprobe = ffprobe_binary().map_err(|e| format!("{e:#}"))?;
+    inspect_preview_proxy(&ffprobe, &input).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn read_preview_video_base64(path: String) -> Result<serde_json::Value, String> {
+    let input = PathBuf::from(path.trim());
+    if input.as_os_str().is_empty() {
+        return Err("Preview path is empty".to_string());
+    }
+    let bytes = fs::read(&input).map_err(|e| format!("failed to read preview video: {e}"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(serde_json::json!({
+        "path": input.display().to_string(),
+        "base64": encoded
+    }))
 }
 
 #[tauri::command]
@@ -505,6 +623,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
     let identity_threshold = request.identity_threshold.clamp(0.0, 1.0);
     let stability = request.stability.clamp(0.0, 1.0);
     let target_face_path = request.target_face_path.clone();
+    let assist_json_path = request.assist_json_path.clone();
     let tracking_engine = request.tracking_engine.clone();
 
     std::thread::spawn(move || {
@@ -708,6 +827,67 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                     }
                 };
             }
+            ReframeTrackingEngine::ManualAssistJson => {
+                let assist_json_raw = assist_json_path.as_ref().map(|s| s.trim()).unwrap_or("");
+                if assist_json_raw.is_empty() {
+                    if let Ok(mut s) = status.lock() {
+                        s.state = RenderState::Failed;
+                        s.progress = 0.0;
+                        s.message = "Manual Assist JSON path is empty".to_string();
+                    }
+                    return;
+                }
+                let assist_json_file = PathBuf::from(assist_json_raw);
+                let assist_project = match load_manual_assist_project(&assist_json_file) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        if let Ok(mut s) = status.lock() {
+                            s.state = RenderState::Failed;
+                            s.progress = 0.0;
+                            s.message = format!("assist json load failed: {err}");
+                        }
+                        return;
+                    }
+                };
+                if let Ok(mut s) = status.lock() {
+                    s.progress = 0.16;
+                    s.message = format!(
+                        "Analyzing manual assist anchors... (anchors={}, stab={:.2})",
+                        assist_project.anchors.len(), stability
+                    );
+                }
+                let assist_target_face_path = assist_project
+                    .target_face_path
+                    .as_ref()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from);
+                let assist_tracking_engine = assist_project
+                    .assist_tracking_engine
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                track_points = match estimate_manual_assist_track_points(
+                    &ffmpeg,
+                    &input_path,
+                    info.width,
+                    info.height,
+                    &assist_project.anchors,
+                    stability,
+                    assist_target_face_path.as_deref().or_else(|| target_face_path.as_ref().map(Path::new)),
+                    assist_tracking_engine,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        if let Ok(mut s) = status.lock() {
+                            s.state = RenderState::Failed;
+                            s.progress = 0.0;
+                            s.message = format!("assist tracking analysis failed: {err:#}");
+                        }
+                        return;
+                    }
+                };
+            }
         }
         beat_points_for_log = track_points.len();
 
@@ -731,7 +911,7 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
         filter_len_for_log = filtergraph.len();
 
         if let Ok(mut s) = status.lock() {
-            s.progress = 0.30;
+            s.progress = 0.36;
             s.message = "Starting FFmpeg render...".to_string();
         }
         let render_result = render_with_ffmpeg(
@@ -781,6 +961,313 @@ fn render_reframe(request: ReframeRenderRequest, state: State<AppState>) -> Resu
                             tracking_engine
                         )
                     };
+                    s.output_path = Some(output_path.clone());
+                    final_message = s.message.clone();
+                    final_ok = true;
+                }
+                Err(err) => {
+                    s.state = RenderState::Failed;
+                    s.message = format!("Render failed: {err:#}");
+                    final_message = s.message.clone();
+                }
+            }
+        }
+
+        let _ = write_export_log(
+            &output_path,
+            LogSnapshot {
+                success: final_ok,
+                status_message: final_message,
+                started_at,
+                finished_at,
+                elapsed_sec,
+                input_video: input_video.clone(),
+                output_video: output_path.clone(),
+                ffmpeg_path: ffmpeg_path_for_log,
+                ffmpeg_version: ffmpeg_ver_for_log,
+                requested_encoder,
+                chosen_encoder: chosen_encoder_for_log,
+                available_hw: available_hw_for_log,
+                preset: ExportPreset::Shorts1080x1920,
+                width: width_for_log,
+                height: height_for_log,
+                frame_rate: frame_rate_for_log,
+                effects: EffectsConfig {
+                    zoom_mode: ZoomMode::None,
+                    zoom_strength: 0.0,
+                    bounce_strength: 0.0,
+                    beat_sensitivity: 0.5,
+                    motion_blur_strength: 0.0,
+                },
+                beat_points: beat_points_for_log,
+                filter_len: filter_len_for_log,
+                render_report: render_report_for_log,
+            },
+        );
+    });
+
+    Ok(job_id)
+}
+
+fn manual_anchors_to_track_points(anchors: &[ManualAssistAnchor], stability: f64) -> Result<Vec<ReframeTrackPoint>, String> {
+    if anchors.is_empty() {
+        return Err("No manual anchors were provided".to_string());
+    }
+
+    let mut points: Vec<ReframeTrackPoint> = anchors
+        .iter()
+        .filter_map(|a| {
+            if !a.time_sec.is_finite() || !a.center_x_ratio.is_finite() {
+                return None;
+            }
+            Some(ReframeTrackPoint {
+                time_sec: a.time_sec.max(0.0),
+                center_x_ratio: a.center_x_ratio.clamp(0.1, 0.9),
+            })
+        })
+        .collect();
+
+    if points.len() < 2 {
+        return Err("At least 2 manual anchors are required".to_string());
+    }
+
+    points.sort_by(|a, b| a.time_sec.partial_cmp(&b.time_sec).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(finalize_reframe_track_points(&points, stability, 180))
+}
+
+#[tauri::command]
+fn render_reframe_assist(request: ManualReframeAssistRequest, state: State<AppState>) -> Result<String, String> {
+    let input_video = request.input_path.trim().to_string();
+    let output_path = request.output_path.trim().to_string();
+
+    if input_video.is_empty() {
+        return Err("Input path is empty".to_string());
+    }
+    if output_path.is_empty() {
+        return Err("Output path is empty".to_string());
+    }
+    if input_video.eq_ignore_ascii_case(&output_path) {
+        return Err("Output path must be different from input video path".to_string());
+    }
+
+    let input_path = PathBuf::from(&input_video);
+    if !input_path.exists() {
+        return Err(format!("Input file does not exist: {input_video}"));
+    }
+
+    let preview = request.preview;
+    let stability = request.stability.clamp(0.0, 1.0);
+    let requested_encoder = request.encoder.clone().unwrap_or(VideoEncoder::Auto);
+    manual_anchors_to_track_points(&request.anchors, stability)?;
+    let assist_anchors = request.anchors.clone();
+    let anchor_count = assist_anchors.len();
+
+    let job_id = Uuid::new_v4().to_string();
+    let status = Arc::new(Mutex::new(RenderStatus {
+        job_id: job_id.clone(),
+        state: RenderState::Queued,
+        progress: 0.0,
+        message: "Queued (preparing assist reframe job)".to_string(),
+        output_path: None,
+    }));
+
+    {
+        let mut renders = state.renders.lock().map_err(|_| "State lock poisoned")?;
+        renders.insert(job_id.clone(), status.clone());
+    }
+
+    std::thread::spawn(move || {
+        let started_at = SystemTime::now();
+        let started_timer = Instant::now();
+
+        let mut ffmpeg_path_for_log = "(not resolved)".to_string();
+        let mut ffmpeg_ver_for_log = "unknown".to_string();
+        let mut available_hw_for_log: Vec<String> = Vec::new();
+        let mut chosen_encoder_for_log = requested_encoder.clone();
+        let mut width_for_log = 1080u32;
+        let mut height_for_log = 1920u32;
+        let mut frame_rate_for_log = if preview { 24 } else { 30 };
+        let mut beat_points_for_log = 0usize;
+        let mut filter_len_for_log = 0usize;
+        let mut render_report_for_log: Option<media::RenderExecutionReport> = None;
+
+        if let Ok(mut s) = status.lock() {
+            s.state = RenderState::Running;
+            s.progress = 0.02;
+            s.message = format!("Starting assist reframe pipeline... (anchors={})", anchor_count);
+        }
+
+        let ffmpeg = match ffmpeg_binary() {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+        let ffprobe = match ffprobe_binary() {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+
+        ffmpeg_path_for_log = ffmpeg.display().to_string();
+        ffmpeg_ver_for_log = tool_version_line(&ffmpeg).unwrap_or_else(|_| "unknown".to_string());
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.06;
+            s.message = "Reading source metadata...".to_string();
+        }
+        let info = match probe_video(&ffprobe, &input_path) {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.10;
+            s.message = format!("Analyzing assist anchors... (anchors={})", anchor_count);
+        }
+        let manual_track_points = match estimate_manual_assist_track_points(
+            &ffmpeg,
+            &input_path,
+            info.width,
+            info.height,
+            &assist_anchors,
+            stability,
+            None,
+            None,
+        ) {
+            Ok(v) => v,
+            Err(_) => match manual_anchors_to_track_points(&assist_anchors, stability) {
+                Ok(v) => v,
+                Err(err) => {
+                    if let Ok(mut s) = status.lock() {
+                        s.state = RenderState::Failed;
+                        s.progress = 0.0;
+                        s.message = format!("Render failed: {err}");
+                    }
+                    return;
+                }
+            },
+        };
+        beat_points_for_log = manual_track_points.len();
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.14;
+            s.message = format!("Assist track ready. sampled points={}", manual_track_points.len());
+        }
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.18;
+            s.message = "Detecting available encoders...".to_string();
+        }
+        let available_hw = match detect_hardware_encoders(&ffmpeg) {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err:#}");
+                }
+                return;
+            }
+        };
+        available_hw_for_log = available_hw.clone();
+
+        let chosen_encoder = match resolve_encoder(requested_encoder.clone(), &available_hw) {
+            Ok(v) => v,
+            Err(err) => {
+                if let Ok(mut s) = status.lock() {
+                    s.state = RenderState::Failed;
+                    s.progress = 0.0;
+                    s.message = format!("Render failed: {err}");
+                }
+                return;
+            }
+        };
+        chosen_encoder_for_log = chosen_encoder.clone();
+
+        let frame_rate = if preview { 24 } else { 30 };
+        frame_rate_for_log = frame_rate;
+        let high_res_source = info.width >= 3000 || info.height >= 1700;
+        let (out_width, out_height) = if preview {
+            (540, 960)
+        } else if high_res_source {
+            (2160, 3840)
+        } else {
+            (1080, 1920)
+        };
+        width_for_log = out_width;
+        height_for_log = out_height;
+
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.30;
+            s.message = format!("Building FFmpeg filtergraph ({}x{}, points={})...", out_width, out_height, manual_track_points.len());
+        }
+        let filtergraph = build_reframe_filtergraph(out_width, out_height, &manual_track_points);
+        filter_len_for_log = filtergraph.len();
+
+        if let Ok(mut s) = status.lock() {
+            s.progress = 0.36;
+            s.message = "Starting FFmpeg render...".to_string();
+        }
+        let render_result = render_with_ffmpeg(
+            &ffmpeg,
+            Path::new(&input_video),
+            Path::new(&output_path),
+            &filtergraph,
+            out_width,
+            out_height,
+            !preview,
+            frame_rate,
+            info.duration_sec,
+            chosen_encoder.clone(),
+            |progress: f64, message: String| {
+                if let Ok(mut s) = status.lock() {
+                    s.progress = (0.30 + progress.clamp(0.0, 1.0) * 0.70).clamp(0.0, 1.0);
+                    s.message = message;
+                }
+            },
+        );
+        if let Ok(report) = &render_result {
+            render_report_for_log = Some(report.clone());
+        }
+
+        let elapsed_sec = started_timer.elapsed().as_secs_f64();
+        let finished_at = SystemTime::now();
+
+        let mut final_message = String::new();
+        let mut final_ok = false;
+
+        if let Ok(mut s) = status.lock() {
+            match &render_result {
+                Ok(_) => {
+                    s.state = RenderState::Completed;
+                    s.progress = 1.0;
+                    s.message = format!(
+                        "Assist reframe completed ({}x{}, manual anchors={}, points={})",
+                        out_width,
+                        out_height,
+                        anchor_count,
+                        manual_track_points.len()
+                    );
                     s.output_path = Some(output_path.clone());
                     final_message = s.message.clone();
                     final_ok = true;
@@ -1148,12 +1635,19 @@ pub fn run() {
             pick_video_file,
             pick_image_file,
             pick_folder,
+            pick_json_file,
             open_video,
+            create_preview_video,
+            inspect_preview_video,
+            read_preview_video_base64,
             analyze_beats,
             set_effects,
             get_project,
             render,
             render_reframe,
+            render_reframe_assist,
+            save_manual_assist_json,
+            load_manual_assist_json,
             get_render_status,
             verify_runtime_tools,
             verify_onnx_runtime_assets,
@@ -1225,6 +1719,23 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

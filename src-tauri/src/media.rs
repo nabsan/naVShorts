@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::{VideoEncoder, VideoInfo, ZoomMode};
+use crate::{ManualAssistAnchor, VideoEncoder, VideoInfo, ZoomMode};
 
 #[derive(Debug, Clone)]
 pub struct ReframeTrackPoint {
@@ -685,6 +685,278 @@ pub fn build_reframe_filtergraph(
     )
 }
 
+pub fn finalize_reframe_track_points(
+    points: &[ReframeTrackPoint],
+    stability: f64,
+    max_points: usize,
+) -> Vec<ReframeTrackPoint> {
+    let stab = stability.clamp(0.0, 1.0);
+    let max_points = max_points.max(8);
+    let alpha = (0.60 - 0.50 * stab).clamp(0.08, 0.72);
+    compress_track_points(points, max_points, alpha, stab)
+}
+
+pub fn estimate_manual_assist_track_points(
+    ffmpeg_path: &Path,
+    input_video: &Path,
+    source_width: u32,
+    source_height: u32,
+    anchors: &[ManualAssistAnchor],
+    stability: f64,
+    target_face_ref: Option<&Path>,
+    assist_tracking_engine: Option<&str>,
+) -> Result<Vec<ReframeTrackPoint>> {
+    if anchors.len() < 2 {
+        return Err(anyhow!("at least 2 manual anchors are required"));
+    }
+
+    let mut anchors = anchors.to_vec();
+    anchors.sort_by(|a, b| a.time_sec.partial_cmp(&b.time_sec).unwrap_or(std::cmp::Ordering::Equal));
+
+    let sample_width = 480u32;
+    let sample_height = scaled_even_height(source_width, source_height, sample_width);
+    let sample_fps = 6.0;
+    let frame_size = (sample_width as usize) * (sample_height as usize);
+    let video_raw = sample_video_gray(ffmpeg_path, input_video, sample_fps, sample_width)?;
+    if frame_size == 0 || video_raw.len() < frame_size {
+        return Err(anyhow!("assist tracking could not sample video frames"));
+    }
+
+    let total_frames = video_raw.len() / frame_size;
+    if total_frames < 2 {
+        return Err(anyhow!("assist tracking needs at least 2 sampled frames"));
+    }
+
+    let mut points = Vec::new();
+    let mut last_center = anchors[0].center_x_ratio.clamp(0.1, 0.9);
+
+    for (seg_idx, pair) in anchors.windows(2).enumerate() {
+        let a = &pair[0];
+        let b = &pair[1];
+        let start_idx = anchor_frame_index(a.time_sec, sample_fps, total_frames);
+        let end_idx = anchor_frame_index(b.time_sec, sample_fps, total_frames);
+
+        if seg_idx == 0 {
+            points.push(ReframeTrackPoint {
+                time_sec: a.time_sec.max(0.0),
+                center_x_ratio: a.center_x_ratio.clamp(0.1, 0.9),
+            });
+        }
+
+        if end_idx <= start_idx + 1 {
+            points.push(ReframeTrackPoint {
+                time_sec: b.time_sec.max(0.0),
+                center_x_ratio: b.center_x_ratio.clamp(0.1, 0.9),
+            });
+            last_center = b.center_x_ratio.clamp(0.1, 0.9);
+            continue;
+        }
+
+        let start_frame = frame_slice(&video_raw, frame_size, start_idx)?;
+        let end_frame = frame_slice(&video_raw, frame_size, end_idx)?;
+
+        let start_box = anchor_rect_to_sample(a, sample_width as usize, sample_height as usize);
+        let end_box = anchor_rect_to_sample(b, sample_width as usize, sample_height as usize);
+
+        let start_template = extract_gray_patch(
+            start_frame,
+            sample_width as usize,
+            sample_height as usize,
+            start_box.0,
+            start_box.1,
+            start_box.2,
+            start_box.3,
+        );
+        let end_template = extract_gray_patch(
+            end_frame,
+            sample_width as usize,
+            sample_height as usize,
+            end_box.0,
+            end_box.1,
+            end_box.2,
+            end_box.3,
+        );
+
+        for idx in (start_idx + 1)..end_idx {
+            let t = idx as f64 / sample_fps;
+            let u = ((t - a.time_sec) / (b.time_sec - a.time_sec).max(1e-6)).clamp(0.0, 1.0);
+            let eased = ease_in_out(u);
+            let predicted = lerp(a.center_x_ratio, b.center_x_ratio, eased).clamp(0.1, 0.9);
+            let frame = frame_slice(&video_raw, frame_size, idx)?;
+            let interp_w = lerp(a.rect_w_ratio, b.rect_w_ratio, eased);
+            let interp_h = lerp(a.rect_h_ratio, b.rect_h_ratio, eased);
+            let search = build_search_window(
+                predicted,
+                last_center,
+                interp_w,
+                interp_h,
+                sample_width as usize,
+                sample_height as usize,
+            );
+
+            let mut matched_center = predicted;
+            let mut matched_conf = 0.0;
+
+            if let Some((templ, tw, th)) = start_template.as_ref() {
+                if let Some((x, _, conf)) = template_match_best_region(
+                    frame,
+                    sample_width as usize,
+                    sample_height as usize,
+                    templ,
+                    *tw,
+                    *th,
+                    search.0,
+                    search.1,
+                    search.2,
+                    search.3,
+                ) {
+                    matched_center = ((x + (*tw / 2)) as f64 / sample_width as f64).clamp(0.1, 0.9);
+                    matched_conf = conf;
+                }
+            }
+
+            if u > 0.45 {
+                if let Some((templ, tw, th)) = end_template.as_ref() {
+                    if let Some((x, _, conf)) = template_match_best_region(
+                        frame,
+                        sample_width as usize,
+                        sample_height as usize,
+                        templ,
+                        *tw,
+                        *th,
+                        search.0,
+                        search.1,
+                        search.2,
+                        search.3,
+                    ) {
+                        let end_center = ((x + (*tw / 2)) as f64 / sample_width as f64).clamp(0.1, 0.9);
+                        let w = ((u - 0.45) / 0.55).clamp(0.0, 1.0);
+                        if conf >= matched_conf {
+                            matched_center = lerp(matched_center, end_center, 0.35 + 0.45 * w);
+                            matched_conf = conf;
+                        } else {
+                            matched_center = lerp(matched_center, end_center, 0.18 + 0.30 * w);
+                        }
+                    }
+                }
+            }
+
+            let trust = (0.22 + 0.58 * matched_conf).clamp(0.18, 0.80);
+            let drift_guard = lerp(last_center, predicted, 0.35).clamp(0.1, 0.9);
+            let center = lerp(drift_guard, matched_center, trust).clamp(0.1, 0.9);
+            last_center = center;
+
+            points.push(ReframeTrackPoint {
+                time_sec: t.max(0.0),
+                center_x_ratio: center,
+            });
+        }
+
+        points.push(ReframeTrackPoint {
+            time_sec: b.time_sec.max(0.0),
+            center_x_ratio: b.center_x_ratio.clamp(0.1, 0.9),
+        });
+        last_center = b.center_x_ratio.clamp(0.1, 0.9);
+    }
+
+    let manual_points = finalize_reframe_track_points(&points, stability, 220);
+    let engine = assist_tracking_engine.unwrap_or("").trim();
+    let Some(target_face_ref) = target_face_ref else {
+        return Ok(manual_points);
+    };
+    if engine.is_empty() || engine == "none" {
+        return Ok(manual_points);
+    }
+
+    let auto_points_result = match engine {
+        "faceIdentity" => estimate_face_track_points(
+            ffmpeg_path,
+            input_video,
+            target_face_ref,
+            source_width,
+            source_height,
+            0.78,
+            0.58,
+            stability,
+        ),
+        "yoloBytetrackArcface" => estimate_person_bytetrack_arcface_points(
+            input_video,
+            source_width,
+            source_height,
+            0.84,
+            stability,
+            Some(target_face_ref),
+            0.66,
+        ),
+        "yoloDeepsortPerson" => estimate_person_track_points(
+            input_video,
+            source_width,
+            source_height,
+            0.80,
+            stability,
+            Some(target_face_ref),
+            0.60,
+        ),
+        _ => return Ok(manual_points),
+    };
+
+    let auto_points = match auto_points_result {
+        Ok(v) if v.len() >= 6 => v,
+        _ => return Ok(manual_points),
+    };
+
+    let mut merged = Vec::with_capacity(manual_points.len());
+    for p in &manual_points {
+        let mut center = p.center_x_ratio;
+        if let Some(auto_center) = interpolate_track_center(&auto_points, p.time_sec) {
+            if let Some((seg_a, seg_b)) = find_anchor_segment(&anchors, p.time_sec) {
+                let seg_dur = (seg_b.time_sec - seg_a.time_sec).max(1e-6);
+                let u = ((p.time_sec - seg_a.time_sec) / seg_dur).clamp(0.0, 1.0);
+                let mid_weight = (std::f64::consts::PI * u).sin().powi(2);
+                let diff = (auto_center - p.center_x_ratio).abs();
+                let diff_guard = (1.0 - diff / 0.30).clamp(0.0, 1.0);
+                let auto_weight = (0.08 + 0.60 * mid_weight * diff_guard).clamp(0.0, 0.62);
+                center = lerp(p.center_x_ratio, auto_center, auto_weight).clamp(0.1, 0.9);
+            }
+        }
+        merged.push(ReframeTrackPoint {
+            time_sec: p.time_sec,
+            center_x_ratio: center,
+        });
+    }
+
+    Ok(finalize_reframe_track_points(&merged, stability, 220))
+}
+
+fn interpolate_track_center(points: &[ReframeTrackPoint], time_sec: f64) -> Option<f64> {
+    if points.is_empty() {
+        return None;
+    }
+    if time_sec <= points[0].time_sec {
+        return Some(points[0].center_x_ratio);
+    }
+    for pair in points.windows(2) {
+        let a = &pair[0];
+        let b = &pair[1];
+        if time_sec <= b.time_sec {
+            let dt = (b.time_sec - a.time_sec).max(1e-6);
+            let u = ((time_sec - a.time_sec) / dt).clamp(0.0, 1.0);
+            return Some(lerp(a.center_x_ratio, b.center_x_ratio, u).clamp(0.1, 0.9));
+        }
+    }
+    points.last().map(|p| p.center_x_ratio)
+}
+
+fn find_anchor_segment<'a>(anchors: &'a [ManualAssistAnchor], time_sec: f64) -> Option<(&'a ManualAssistAnchor, &'a ManualAssistAnchor)> {
+    for pair in anchors.windows(2) {
+        let a = &pair[0];
+        let b = &pair[1];
+        if time_sec >= a.time_sec && time_sec <= b.time_sec {
+            return Some((a, b));
+        }
+    }
+    None
+}
 pub fn estimate_face_track_points(
     ffmpeg_path: &Path,
     input_video: &Path,
@@ -770,6 +1042,124 @@ pub fn estimate_face_track_points(
     Ok(compress_track_points(&points, max_points, alpha, stab))
 }
 
+pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path) -> Result<PathBuf> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let out_path = env::temp_dir().join(format!("navshorts_assist_preview_{now}.mp4"));
+    let vf = "scale=480:-2:flags=bicubic,setsar=1,format=yuv420p";
+    let out = Command::new(ffmpeg_path)
+        .arg("-y")
+        .arg("-v")
+        .arg("error")
+        .arg("-fflags")
+        .arg("+genpts")
+        .arg("-i")
+        .arg(input_video)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-map_metadata")
+        .arg("-1")
+        .arg("-map_chapters")
+        .arg("-1")
+        .arg("-dn")
+        .arg("-sn")
+        .arg("-an")
+        .arg("-vf")
+        .arg(vf)
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-profile:v")
+        .arg("baseline")
+        .arg("-preset")
+        .arg("ultrafast")
+        .arg("-crf")
+        .arg("34")
+        .arg("-r")
+        .arg("12")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg("-f")
+        .arg("mp4")
+        .arg(&out_path)
+        .output()
+        .with_context(|| format!("failed to create preview proxy for {}", input_video.display()))?;
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "preview proxy creation failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    Ok(out_path)
+}
+
+
+pub fn inspect_preview_proxy(ffprobe_path: &Path, preview_path: &Path) -> Result<serde_json::Value> {
+    let exists = preview_path.exists();
+    let metadata = fs::metadata(preview_path).ok();
+    let size_bytes = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+
+    let mut head = [0u8; 32];
+    let head_hex = match fs::File::open(preview_path) {
+        Ok(mut f) => {
+            let n = f.read(&mut head).unwrap_or(0);
+            head[..n]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join("")
+        }
+        Err(_) => String::new(),
+    };
+
+    let ffprobe_output = Command::new(ffprobe_path)
+        .arg("-v")
+        .arg("error")
+        .arg("-print_format")
+        .arg("json")
+        .arg("-show_streams")
+        .arg("-show_format")
+        .arg(preview_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let (ffprobe_status, ffprobe_stdout, ffprobe_stderr, ffprobe_json) = match ffprobe_output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let parsed = serde_json::from_slice::<serde_json::Value>(&out.stdout).ok();
+            (
+                out.status.to_string(),
+                stdout,
+                stderr,
+                parsed.unwrap_or_else(|| serde_json::json!(null)),
+            )
+        }
+        Err(err) => (
+            format!("spawn_failed:{err}"),
+            String::new(),
+            err.to_string(),
+            serde_json::json!(null),
+        ),
+    };
+
+    Ok(serde_json::json!({
+        "path": preview_path.display().to_string(),
+        "exists": exists,
+        "sizeBytes": size_bytes,
+        "headHex": head_hex,
+        "ffprobeStatus": ffprobe_status,
+        "ffprobeStdoutLen": ffprobe_stdout.len(),
+        "ffprobeStderr": ffprobe_stderr,
+        "ffprobe": ffprobe_json
+    }))
+}
 pub fn render_with_ffmpeg<F: FnMut(f64, String)>(
     ffmpeg_path: &Path,
     input: &Path,
@@ -1326,6 +1716,153 @@ fn template_match_best(
     Some((best_x, best_y, confidence))
 }
 
+fn anchor_frame_index(time_sec: f64, sample_fps: f64, total_frames: usize) -> usize {
+    if total_frames == 0 {
+        return 0;
+    }
+    let idx = (time_sec.max(0.0) * sample_fps).round() as usize;
+    idx.min(total_frames.saturating_sub(1))
+}
+
+fn frame_slice<'a>(video_raw: &'a [u8], frame_size: usize, frame_idx: usize) -> Result<&'a [u8]> {
+    let start = frame_idx.saturating_mul(frame_size);
+    let end = start.saturating_add(frame_size);
+    if end > video_raw.len() {
+        return Err(anyhow!("sampled frame index out of range: {}", frame_idx));
+    }
+    Ok(&video_raw[start..end])
+}
+
+fn anchor_rect_to_sample(
+    anchor: &ManualAssistAnchor,
+    frame_w: usize,
+    frame_h: usize,
+) -> (usize, usize, usize, usize) {
+    let x = (anchor.rect_x_ratio.clamp(0.0, 0.98) * frame_w as f64).round() as usize;
+    let y = (anchor.rect_y_ratio.clamp(0.0, 0.98) * frame_h as f64).round() as usize;
+    let w = ((anchor.rect_w_ratio.clamp(0.02, 0.9) * frame_w as f64).round() as usize).clamp(20, frame_w.max(20));
+    let h = ((anchor.rect_h_ratio.clamp(0.02, 0.9) * frame_h as f64).round() as usize).clamp(20, frame_h.max(20));
+    let safe_w = w.min(frame_w.saturating_sub(x).max(1));
+    let safe_h = h.min(frame_h.saturating_sub(y).max(1));
+    (x.min(frame_w.saturating_sub(1)), y.min(frame_h.saturating_sub(1)), safe_w.max(1), safe_h.max(1))
+}
+
+fn extract_gray_patch(
+    frame: &[u8],
+    frame_w: usize,
+    frame_h: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+) -> Option<(Vec<u8>, usize, usize)> {
+    if x >= frame_w || y >= frame_h || w == 0 || h == 0 {
+        return None;
+    }
+    let x2 = (x + w).min(frame_w);
+    let y2 = (y + h).min(frame_h);
+    let patch_w = x2.saturating_sub(x);
+    let patch_h = y2.saturating_sub(y);
+    if patch_w < 12 || patch_h < 12 {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(patch_w * patch_h);
+    for yy in y..y2 {
+        let row = yy * frame_w;
+        out.extend_from_slice(&frame[row + x..row + x2]);
+    }
+    Some((out, patch_w, patch_h))
+}
+
+fn template_match_best_region(
+    frame: &[u8],
+    frame_w: usize,
+    frame_h: usize,
+    templ: &[u8],
+    templ_w: usize,
+    templ_h: usize,
+    search_x0: usize,
+    search_y0: usize,
+    search_x1: usize,
+    search_y1: usize,
+) -> Option<(usize, usize, f64)> {
+    if frame_w < templ_w || frame_h < templ_h || templ_w == 0 || templ_h == 0 {
+        return None;
+    }
+
+    let max_x = frame_w.saturating_sub(templ_w);
+    let max_y = frame_h.saturating_sub(templ_h);
+    let sx0 = search_x0.min(max_x);
+    let sy0 = search_y0.min(max_y);
+    let sx1 = search_x1.min(max_x);
+    let sy1 = search_y1.min(max_y);
+    if sx1 < sx0 || sy1 < sy0 {
+        return None;
+    }
+
+    let stride = 2usize;
+    let mut best_score = f64::INFINITY;
+    let mut best_x = sx0;
+    let mut best_y = sy0;
+
+    let mut y = sy0;
+    while y <= sy1 {
+        let mut x = sx0;
+        while x <= sx1 {
+            let mut sad: u64 = 0;
+            for ty in 0..templ_h {
+                let f_row = (y + ty) * frame_w + x;
+                let t_row = ty * templ_w;
+                for tx in 0..templ_w {
+                    let a = frame[f_row + tx] as i32;
+                    let b = templ[t_row + tx] as i32;
+                    sad += (a - b).unsigned_abs() as u64;
+                }
+            }
+            let norm = sad as f64 / (templ_w * templ_h) as f64 / 255.0;
+            if norm < best_score {
+                best_score = norm;
+                best_x = x;
+                best_y = y;
+            }
+            x = x.saturating_add(stride);
+            if x == usize::MAX { break }
+        }
+        y = y.saturating_add(stride);
+        if y == usize::MAX { break }
+    }
+
+    Some((best_x, best_y, (1.0 - best_score).clamp(0.0, 1.0)))
+}
+
+fn build_search_window(
+    predicted_center: f64,
+    last_center: f64,
+    rect_w_ratio: f64,
+    rect_h_ratio: f64,
+    frame_w: usize,
+    frame_h: usize,
+) -> (usize, usize, usize, usize) {
+    let center = lerp(predicted_center, last_center, 0.35).clamp(0.05, 0.95);
+    let search_w = ((rect_w_ratio.clamp(0.04, 0.45) * frame_w as f64) * 3.8).round() as usize;
+    let search_h = ((rect_h_ratio.clamp(0.04, 0.45) * frame_h as f64) * 2.8).round() as usize;
+    let cx = (center * frame_w as f64).round() as isize;
+    let x0 = (cx - (search_w as isize / 2)).max(0) as usize;
+    let x1 = (cx + (search_w as isize / 2)).max(0) as usize;
+    let y0 = ((frame_h as f64 * 0.10).round() as usize).min(frame_h.saturating_sub(1));
+    let y1 = ((frame_h as f64 * 0.90).round() as usize).min(frame_h.saturating_sub(1));
+    (x0.min(frame_w.saturating_sub(1)), y0, x1.min(frame_w.saturating_sub(1)), y1)
+}
+
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t.clamp(0.0, 1.0)
+}
+
+fn ease_in_out(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
 fn compress_track_points(
     points: &[ReframeTrackPoint],
     max_points: usize,
@@ -1705,6 +2242,17 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 

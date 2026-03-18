@@ -271,3 +271,73 @@ pre {
     text-align: left;
   }
 }
+
+.assistLayout {
+  grid-template-columns: 1.1fr 0.9fr;
+}
+
+.assistHelp {
+  margin-top: 10px;
+  color: #42556a;
+  font-size: 13px;
+}
+
+.assistVideoWrap {
+  position: relative;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #11161d;
+  overflow: hidden;
+}
+
+.assistVideo {
+  width: 100%;
+  display: block;
+  max-height: 540px;
+  background: #0c1015;
+}
+
+.assistOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.assistMeta {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #42556a;
+}
+
+.anchorList {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.anchorItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f6efe2;
+}
+
+.anchorActions {
+  display: flex;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.anchorActions button {
+  min-height: 32px;
+  padding: 6px 10px;
+}

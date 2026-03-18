@@ -17,6 +17,7 @@
     </div>
     <nav class="tabs" aria-label="Workspace tabs">
       <a class="tab active" href="./reframe.html">1. Reframe</a>
+      <a class="tab" href="./reframe_assist.html">1B. Reframe Assist</a>
       <a class="tab" href="./index.html">2. Effects</a>
     </nav>
   </header>
@@ -43,12 +44,19 @@
       </div>
 
 
+      <div class="fieldRow fieldRow3">
+        <label for="assistJsonPath" class="inlineLabel">Assist JSON path</label>
+        <input id="assistJsonPath" placeholder="C:\videos\source_assist_yymmddhhmmss.json" readonly />
+        <button id="pickAssistJsonBtn" class="secondary">Select Assist JSON</button>
+      </div>
+
       <div class="fieldRow fieldRow2">
         <label for="trackingEngine" class="inlineLabel">Tracking engine</label>
         <select id="trackingEngine">
           <option value="faceIdentity" selected>Face Identity (ONNX)</option>
           <option value="yoloDeepsortPerson">Person YOLO + DeepSORT</option>
           <option value="yoloBytetrackArcface">Person YOLO + ByteTrack + ArcFace</option>
+          <option value="manualAssistJson">Manual Assist JSON</option>
         </select>
       </div>
       <div class="row">
@@ -114,6 +122,8 @@
   <script type="module" src="./reframe.js?v=20260313-1"></script>
 </body>
 </html>
+
+
 
 
 
