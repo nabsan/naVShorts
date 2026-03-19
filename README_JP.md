@@ -3,6 +3,10 @@
 naVShorts は、縦向きショート動画を作るための Windows デスクトップアプリです。  
 構成は **Tauri + Rust + FFmpeg** です。
 
+## RC1 状態
+現在の repository 状態を c1 として扱います。
+c1 は、主要なエンドツーエンドの作業フローが日常利用に十分安定しており、今後は主に細かな改善や磨き込みを続ける段階、という意味です。
+
 ## ワークフロー
 - `1. Pre Reframe`: 手動の顔矩形アンカーを置き、Assist JSON を作って Reframe の下準備をする
 - `2. Reframe`: 横長動画を縦 `9:16` に変換し、人物追従しながら書き出す
@@ -138,3 +142,4 @@ npm.cmd run tauri dev
 - `1. Pre Reframe` で preview proxy キャッシュ再利用、現在枠中心表示、ショートカット操作を追加
 - `3. Effects` では Preview / Final のどちらでも自動で `Analyze Beats -> Apply Effects` を実行するよう改善
 - Effects Preview は `_preview` ファイル名で軽量設定出力するよう改善
+
