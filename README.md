@@ -65,11 +65,17 @@ Adjustment rules:
 6. Save Assist JSON.
 7. Send Assist JSON to `1. Reframe`.
 8. In `1. Reframe`, keep `Tracking engine = Manual Assist JSON` and export.
-
 Notes:
 - Manual anchors are always respected.
 - Auto assist is blended mainly between anchors, so you only need to correct drift points.
 - If assist tracking fails, manual anchors still remain the fallback path.
+- Opening the same source video again reuses the cached Assist preview proxy when the file path / size / modified time match.
+- By default, `1B` shows the current interpolated box only. Enable `Show all saved anchors` if you want to inspect every anchor.
+- Keyboard shortcuts in `1B`:
+  - `Space`: play / pause
+  - `J`: jump back 3 seconds
+  - `L`: jump forward 3 seconds
+  - `Left / Right`: move by about 1 frame
 
 ## Effects Export Presets
 - YouTube Shorts `1080x1920`
@@ -114,3 +120,7 @@ npm.cmd run tauri dev
 - Added `Manual Assist JSON` tracking mode in `1. Reframe`.
 - Added hybrid assist tracking using `target face folder path` plus auto engines between manual anchors.
 - `1. Reframe` now auto-loads target face folder info from Assist JSON when available.
+- `1B` now reuses cached preview proxies when the same source video is opened again.
+- `1B` now shows the current interpolated box by default, with optional full-anchor overlay.
+- Added keyboard shortcuts in `1B`: `Space`, `J`, `L`, `Left`, `Right`.
+

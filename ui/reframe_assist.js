@@ -21,7 +21,7 @@ function resolveConvertFileSrc() {
 const tauriInvoke = resolveInvoke();
 const convertFileSrc = resolveConvertFileSrc();
 const $ = (id) => document.getElementById(id);
-const SETTINGS_KEY = "naVShorts.reframeAssist.v4";
+const SETTINGS_KEY = "naVShorts.reframeAssist.v5";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
 
 const sourceVideoPath = $("sourceVideoPath");
@@ -32,6 +32,7 @@ const assistTrackingEngine = $("assistTrackingEngine");
 const stability = $("stability");
 const stabilityValue = $("stabilityValue");
 const playbackRate = $("playbackRate");
+const showAllAnchors = $("showAllAnchors");
 const assistVideo = $("assistVideo");
 const assistOverlay = $("assistOverlay");
 const assistMeta = $("assistMeta");
@@ -93,12 +94,7 @@ function elementSnapshot() {
     videoWidth: assistVideo.videoWidth || 0,
     videoHeight: assistVideo.videoHeight || 0,
     playbackRate: assistVideo.playbackRate,
-    error: err
-      ? {
-          code: err.code,
-          message: err.message || "",
-        }
-      : null,
+    error: err ? { code: err.code, message: err.message || "" } : null,
   };
 }
 
@@ -118,11 +114,7 @@ function updateDiagnostics(patch = {}, print = true) {
 }
 
 function pushVideoEvent(name, extra = {}) {
-  mediaDiagnostics.events.push({
-    at: new Date().toISOString(),
-    event: name,
-    ...extra,
-  });
+  mediaDiagnostics.events.push({ at: new Date().toISOString(), event: name, ...extra });
   trimEvents();
   updateDiagnostics({}, true);
 }
@@ -179,6 +171,7 @@ function saveSettings() {
     playbackRate: playbackRate.value,
     targetFacePath: targetFacePath?.value || DEFAULT_FACE_FOLDER,
     assistTrackingEngine: assistTrackingEngine?.value || "yoloBytetrackArcface",
+    showAllAnchors: Boolean(showAllAnchors?.checked),
   };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
 }
@@ -193,6 +186,7 @@ function loadSettings() {
     if (typeof s.playbackRate === "string") playbackRate.value = s.playbackRate;
     if (targetFacePath) targetFacePath.value = typeof s.targetFacePath === "string" && s.targetFacePath.trim() ? s.targetFacePath : DEFAULT_FACE_FOLDER;
     if (assistTrackingEngine && typeof s.assistTrackingEngine === "string") assistTrackingEngine.value = s.assistTrackingEngine;
+    if (showAllAnchors) showAllAnchors.checked = Boolean(s.showAllAnchors);
   } catch {
     // ignore
   }
@@ -234,31 +228,79 @@ function syncOverlaySize() {
   redrawOverlay();
 }
 
+function interpolateAnchorValue(a, b, key, u) {
+  return (a[key] + (b[key] - a[key]) * u);
+}
+
+function getDisplayRectAtTime(timeSec) {
+  if (anchors.length === 0) return null;
+  const sorted = anchors;
+  if (sorted.length === 1) return sorted[0];
+  if (timeSec <= sorted[0].timeSec) return sorted[0];
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    if (timeSec <= b.timeSec) {
+      const dt = Math.max(0.001, b.timeSec - a.timeSec);
+      const u = Math.min(Math.max((timeSec - a.timeSec) / dt, 0), 1);
+      return {
+        timeSec,
+        centerXRatio: interpolateAnchorValue(a, b, "centerXRatio", u),
+        rectXRatio: interpolateAnchorValue(a, b, "rectXRatio", u),
+        rectYRatio: interpolateAnchorValue(a, b, "rectYRatio", u),
+        rectWRatio: interpolateAnchorValue(a, b, "rectWRatio", u),
+        rectHRatio: interpolateAnchorValue(a, b, "rectHRatio", u),
+      };
+    }
+  }
+  return sorted[sorted.length - 1];
+}
+
+function drawRect(anchor, stroke, fill, lineWidth = 2) {
+  if (!anchor) return;
+  const ctx = assistOverlay.getContext("2d");
+  const x = anchor.rectXRatio * assistOverlay.width;
+  const y = anchor.rectYRatio * assistOverlay.height;
+  const w = anchor.rectWRatio * assistOverlay.width;
+  const h = anchor.rectHRatio * assistOverlay.height;
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = stroke;
+  ctx.fillStyle = fill;
+  ctx.strokeRect(x, y, w, h);
+  if (fill) ctx.fillRect(x, y, w, h);
+}
+
 function redrawOverlay() {
   const ctx = assistOverlay.getContext("2d");
   ctx.clearRect(0, 0, assistOverlay.width, assistOverlay.height);
 
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(217,79,48,0.95)";
-  ctx.fillStyle = "rgba(217,79,48,0.16)";
-  for (const anchor of anchors) {
-    const x = anchor.rectXRatio * assistOverlay.width;
-    const y = anchor.rectYRatio * assistOverlay.height;
-    const w = anchor.rectWRatio * assistOverlay.width;
-    const h = anchor.rectHRatio * assistOverlay.height;
-    ctx.strokeRect(x, y, w, h);
+  if (showAllAnchors?.checked) {
+    for (const anchor of anchors) {
+      drawRect(anchor, "rgba(217,79,48,0.55)", "rgba(217,79,48,0.08)", 1.5);
+    }
   }
 
+  const displayRect = getDisplayRectAtTime(Number(assistVideo.currentTime || 0));
+  drawRect(displayRect, "rgba(31,107,140,0.98)", "rgba(31,107,140,0.14)", 2.5);
+
   if (dragRect) {
-    ctx.strokeStyle = "rgba(31,107,140,0.95)";
-    ctx.fillStyle = "rgba(31,107,140,0.18)";
-    ctx.strokeRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
-    ctx.fillRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+    const previewAnchor = {
+      rectXRatio: dragRect.x / assistOverlay.width,
+      rectYRatio: dragRect.y / assistOverlay.height,
+      rectWRatio: dragRect.w / assistOverlay.width,
+      rectHRatio: dragRect.h / assistOverlay.height,
+    };
+    drawRect(previewAnchor, "rgba(217,79,48,0.98)", "rgba(217,79,48,0.18)", 2);
   }
 }
 
 function renderAnchors() {
-  anchorJson.textContent = JSON.stringify({ sourceVideo: sourceVideoPath.value.trim() || null, targetFacePath: targetFacePath?.value?.trim() || null, assistTrackingEngine: assistTrackingEngine?.value || "yoloBytetrackArcface", anchors }, null, 2);
+  anchorJson.textContent = JSON.stringify({
+    sourceVideo: sourceVideoPath.value.trim() || null,
+    targetFacePath: targetFacePath?.value?.trim() || null,
+    assistTrackingEngine: assistTrackingEngine?.value || "yoloBytetrackArcface",
+    anchors,
+  }, null, 2);
   anchorList.innerHTML = "";
   if (anchors.length === 0) {
     anchorList.textContent = "No anchors yet.";
@@ -424,24 +466,16 @@ async function attachPreviewForSource(sourcePath) {
       mode: "blob-url-fetch",
     };
   } catch (error) {
-    mediaDiagnostics.fetch = {
-      error: String(error),
-      mode: "asset-url-fallback",
-    };
+    mediaDiagnostics.fetch = { error: String(error), mode: "asset-url-fallback" };
     try {
       const base64Payload = await invoke("read_preview_video_base64", { path: previewPath });
       const raw = atob(base64Payload.base64 || "");
       const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i += 1) {
-        bytes[i] = raw.charCodeAt(i);
-      }
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
       const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
       lastBlobUrl = blobUrl;
       assignedSrc = blobUrl;
-      mediaDiagnostics.fetch = {
-        mode: "blob-url-base64",
-        blobSize: bytes.byteLength,
-      };
+      mediaDiagnostics.fetch = { mode: "blob-url-base64", blobSize: bytes.byteLength };
     } catch (base64Error) {
       mediaDiagnostics.fetch = {
         error: String(error),
@@ -466,17 +500,61 @@ async function loadAssistJsonFromPath(path) {
   if (assistTrackingEngine && typeof result.assistTrackingEngine === "string" && result.assistTrackingEngine.trim()) assistTrackingEngine.value = result.assistTrackingEngine;
   if (typeof result.sourceVideo === "string" && result.sourceVideo.trim()) {
     sourceVideoPath.value = result.sourceVideo;
-    try {
-      const info = await invoke("open_video", { path: result.sourceVideo });
-      videoInfo = info;
-      await attachPreviewForSource(result.sourceVideo);
-    } catch (e) {
-      printStatus(String(e));
-    }
+    const info = await invoke("open_video", { path: result.sourceVideo });
+    videoInfo = info;
+    await attachPreviewForSource(result.sourceVideo);
   }
   renderAnchors();
   updateMeta();
   printStatus({ message: `Assist JSON loaded. anchors=${anchors.length}` });
+}
+
+async function togglePlayback(trigger = "button") {
+  if (!assistVideo.src) {
+    printStatus("No preview video src is attached yet.");
+    return;
+  }
+  try {
+    if (assistVideo.paused) {
+      printStatus({ message: `Calling video.play() via ${trigger}...` });
+      const p = assistVideo.play();
+      if (p && typeof p.then === "function") await p;
+      pushVideoEvent("playCallResolved", { trigger });
+    } else {
+      assistVideo.pause();
+      pushVideoEvent("pauseCallResolved", { trigger });
+    }
+  } catch (e) {
+    pushVideoEvent("playCallRejected", { trigger, message: String(e) });
+    printStatus(`Video play failed: ${e}`);
+  }
+}
+
+function isKeyboardShortcutAllowed(event) {
+  if (event.defaultPrevented) return false;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return true;
+  const tag = target.tagName;
+  if (target.isContentEditable) return false;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return false;
+  return true;
+}
+
+function getFrameStepSeconds() {
+  const fps = Number(videoInfo?.fps || 0);
+  if (Number.isFinite(fps) && fps > 0) return 1 / fps;
+  return 1 / 30;
+}
+
+function seekBySeconds(deltaSec, trigger = "shortcut") {
+  if (!assistVideo.src || !Number.isFinite(deltaSec)) return;
+  const duration = Number.isFinite(assistVideo.duration) ? assistVideo.duration : Number(videoInfo?.durationSec || 0);
+  const maxTime = duration > 0 ? Math.max(duration - 0.001, 0) : Number.MAX_SAFE_INTEGER;
+  const nextTime = Math.min(Math.max((assistVideo.currentTime || 0) + deltaSec, 0), maxTime);
+  assistVideo.currentTime = nextTime;
+  pushVideoEvent("seekShortcut", { trigger, deltaSec, nextTime });
+  updateMeta();
+  redrawOverlay();
 }
 
 async function openSourceVideo() {
@@ -512,12 +590,7 @@ assistOverlay.addEventListener("mousedown", (ev) => {
 assistOverlay.addEventListener("mousemove", (ev) => {
   if (!dragStart) return;
   const pt = getCanvasPoint(ev);
-  dragRect = {
-    x: dragStart.x,
-    y: dragStart.y,
-    w: pt.x - dragStart.x,
-    h: pt.y - dragStart.y,
-  };
+  dragRect = { x: dragStart.x, y: dragStart.y, w: pt.x - dragStart.x, h: pt.y - dragStart.y };
   redrawOverlay();
 });
 
@@ -534,23 +607,8 @@ assistOverlay.addEventListener("mouseleave", () => {
 });
 
 [
-  "loadstart",
-  "durationchange",
-  "loadedmetadata",
-  "loadeddata",
-  "progress",
-  "canplay",
-  "canplaythrough",
-  "play",
-  "playing",
-  "pause",
-  "stalled",
-  "suspend",
-  "waiting",
-  "abort",
-  "emptied",
-  "seeked",
-  "seeking"
+  "loadstart", "durationchange", "loadedmetadata", "loadeddata", "progress", "canplay", "canplaythrough",
+  "play", "playing", "pause", "stalled", "suspend", "waiting", "abort", "emptied", "seeked", "seeking"
 ].forEach((name) => {
   assistVideo.addEventListener(name, () => {
     syncOverlaySize();
@@ -561,15 +619,13 @@ assistOverlay.addEventListener("mouseleave", () => {
 
 assistVideo.addEventListener("error", () => {
   const err = assistVideo.error;
-  pushVideoEvent("error", {
-    code: err?.code || null,
-    message: err?.message || "",
-  });
-  printStatus({
-    message: `Video load error${err ? ` code=${err.code}` : ""}`,
-  });
+  pushVideoEvent("error", { code: err?.code || null, message: err?.message || "" });
+  printStatus({ message: `Video load error${err ? ` code=${err.code}` : ""}` });
 });
-assistVideo.addEventListener("timeupdate", updateMeta);
+assistVideo.addEventListener("timeupdate", () => {
+  updateMeta();
+  redrawOverlay();
+});
 window.addEventListener("resize", syncOverlaySize);
 
 loadSettings();
@@ -579,6 +635,12 @@ playbackRate.addEventListener("change", () => {
   saveSettings();
   updateDiagnostics({}, true);
 });
+if (showAllAnchors) {
+  showAllAnchors.addEventListener("change", () => {
+    saveSettings();
+    redrawOverlay();
+  });
+}
 assistVideo.playbackRate = Number(playbackRate.value || 1);
 
 $("verifyBtn").addEventListener("click", async () => {
@@ -606,47 +668,46 @@ if (pickTargetFaceBtn) {
     }
   });
 }
-if (assistTrackingEngine) {
-  assistTrackingEngine.addEventListener("change", saveSettings);
-}
-if (pickTargetFaceBtn) {
-  pickTargetFaceBtn.addEventListener("click", async () => {
-    try {
-      const picked = await invoke("pick_folder");
-      if (!picked) {
-        printStatus("Face folder selection cancelled.");
-        return;
-      }
-      targetFacePath.value = picked;
-      saveSettings();
-      printStatus("Target face folder selected for Assist.");
-    } catch (e) {
-      printStatus(String(e));
-    }
-  });
-}
-if (assistTrackingEngine) {
-  assistTrackingEngine.addEventListener("change", saveSettings);
-}
+if (assistTrackingEngine) assistTrackingEngine.addEventListener("change", saveSettings);
+
 $("playPauseBtn").addEventListener("click", async () => {
-  if (!assistVideo.src) {
-    printStatus("No preview video src is attached yet.");
+  await togglePlayback("button");
+});
+
+document.addEventListener("keydown", async (event) => {
+  if (!isKeyboardShortcutAllowed(event)) return;
+
+  if (event.code === "Space") {
+    if (event.repeat) return;
+    event.preventDefault();
+    await togglePlayback("space");
     return;
   }
-  try {
-    if (assistVideo.paused) {
-      printStatus({ message: "Calling video.play()..." });
-      const p = assistVideo.play();
-      if (p && typeof p.then === "function") await p;
-      pushVideoEvent("playCallResolved");
-    } else {
-      assistVideo.pause();
-    }
-  } catch (e) {
-    pushVideoEvent("playCallRejected", { message: String(e) });
-    printStatus(`Video play failed: ${e}`);
+
+  if (event.code === "KeyJ") {
+    event.preventDefault();
+    seekBySeconds(-3, "keyJ");
+    return;
+  }
+
+  if (event.code === "KeyL") {
+    event.preventDefault();
+    seekBySeconds(3, "keyL");
+    return;
+  }
+
+  if (event.code === "ArrowLeft") {
+    event.preventDefault();
+    seekBySeconds(-getFrameStepSeconds(), "arrowLeft");
+    return;
+  }
+
+  if (event.code === "ArrowRight") {
+    event.preventDefault();
+    seekBySeconds(getFrameStepSeconds(), "arrowRight");
   }
 });
+
 $("clearSelectionBtn").addEventListener("click", () => {
   dragRect = null;
   dragStart = null;
@@ -682,29 +743,18 @@ $("sendToReframeBtn").addEventListener("click", async () => {
     printStatus("Assist JSON path is empty.");
     return;
   }
-  if (anchors.length >= 2) {
-    await saveAssistJson();
-  }
+  if (anchors.length >= 2) await saveAssistJson();
   const u = new URL("./reframe.html", window.location.href);
   u.searchParams.set("assistJson", path);
   window.location.href = u.toString();
 });
 
-if (!tauriInvoke) {
-  printStatus("Tauri API not available");
-}
+if (!tauriInvoke) printStatus("Tauri API not available");
 
 updateOverlayInteractivity();
 setProgress(0, "Idle");
 renderAnchors();
 updateMeta();
 updateDiagnostics({}, true);
-
-
-
-
-
-
-
 
 

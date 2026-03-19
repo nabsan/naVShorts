@@ -1,10 +1,12 @@
-﻿use std::collections::HashSet;
+﻿use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
+use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
@@ -1043,11 +1045,30 @@ pub fn estimate_face_track_points(
 }
 
 pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path) -> Result<PathBuf> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let out_path = env::temp_dir().join(format!("navshorts_assist_preview_{now}.mp4"));
+    let metadata = fs::metadata(input_video)
+        .with_context(|| format!("failed to stat source video {}", input_video.display()))?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let cache_profile = format!(
+        "navshorts-assist-preview-v4|{}|{}|{}|480|12|34",
+        input_video.display(),
+        metadata.len(),
+        modified_ms
+    );
+    let mut hasher = DefaultHasher::new();
+    cache_profile.hash(&mut hasher);
+    let cache_key = hasher.finish();
+    let out_path = env::temp_dir().join(format!("navshorts_assist_preview_{cache_key:016x}.mp4"));
+    if out_path.exists() {
+        let cached_size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+        if cached_size > 0 {
+            return Ok(out_path);
+        }
+    }
     let vf = "scale=480:-2:flags=bicubic,setsar=1,format=yuv420p";
     let out = Command::new(ffmpeg_path)
         .arg("-y")
@@ -2242,6 +2263,9 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
+
+
 
 
 

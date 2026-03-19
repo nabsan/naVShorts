@@ -345,6 +345,11 @@ if (pickAssistJsonBtn) {
       }
       assistJsonPath.value = picked;
       const assistProject = await invoke("load_manual_assist_json", { path: picked });
+      if (typeof assistProject.sourceVideo === "string" && assistProject.sourceVideo.trim()) {
+        sourceVideoPath.value = assistProject.sourceVideo;
+        await invoke("open_video", { path: assistProject.sourceVideo });
+        reframeOutputPath.value = buildOutputPath(assistProject.sourceVideo);
+      }
       if (typeof assistProject.targetFacePath === "string" && assistProject.targetFacePath.trim()) {
         targetFacePath.value = assistProject.targetFacePath;
       }
@@ -427,7 +432,12 @@ const assistJsonFromUrl = new URLSearchParams(window.location.search).get("assis
 if (assistJsonFromUrl) {
   assistJsonPath.value = assistJsonFromUrl;
   invoke("load_manual_assist_json", { path: assistJsonFromUrl })
-    .then((assistProject) => {
+    .then(async (assistProject) => {
+      if (typeof assistProject.sourceVideo === "string" && assistProject.sourceVideo.trim()) {
+        sourceVideoPath.value = assistProject.sourceVideo;
+        await invoke("open_video", { path: assistProject.sourceVideo });
+        reframeOutputPath.value = buildOutputPath(assistProject.sourceVideo);
+      }
       if (typeof assistProject.targetFacePath === "string" && assistProject.targetFacePath.trim()) {
         targetFacePath.value = assistProject.targetFacePath;
       }
@@ -453,4 +463,5 @@ if (!tauriInvoke) {
 setProgress(0, "Idle");
 verifyTools().catch(() => {});
 refreshProject().catch(() => {});
+
 
