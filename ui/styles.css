@@ -341,3 +341,42 @@ pre {
   min-height: 32px;
   padding: 6px 10px;
 }
+
+.assistShortcutCard {
+  margin-top: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(31, 107, 140, 0.06);
+}
+
+.assistShortcutTitle {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.assistShortcutGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 12px;
+}
+
+.assistShortcutGrid div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+
+.assistShortcutGrid kbd {
+  min-width: 52px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(14, 37, 64, 0.22);
+  background: #fff;
+  font-family: inherit;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: inset 0 -1px 0 rgba(14, 37, 64, 0.08);
+}
