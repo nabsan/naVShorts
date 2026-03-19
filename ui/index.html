@@ -16,27 +16,21 @@
       </div>
     </div>
     <nav class="tabs" aria-label="Workspace tabs">
-      <a class="tab" href="./reframe.html">1. Reframe</a>
-      <a class="tab" href="./reframe_assist.html">1B. Reframe Assist</a>
-      <a class="tab active" href="./index.html">2. Effects</a>
+      <a class="tab" href="./reframe_assist.html">1. Pre Reframe</a>
+      <a class="tab" href="./reframe.html">2. Reframe</a>
+      <a class="tab active" href="./index.html">3. Effects</a>
+      <a class="tab" href="./settings.html">4. Settings</a>
     </nav>
   </header>
-
   <main class="layout">
     <section class="panel">
       <h1>Effects Workspace</h1>
-      <p class="sub">Step 2: Add zoom/beat effects and export final vertical video.</p>
-
-      <div class="row row-single topActionRow">
-        <button id="verifyBtn" class="secondary">Verify FFmpeg</button>
-      </div>
-
+      <p class="sub">Step 3: Add zoom / beat effects and export the final vertical social video.</p>
       <div class="fieldRow fieldRow3">
         <label for="videoPath" class="inlineLabel">Video file path</label>
         <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
         <button id="openBtn">Select & Open Video</button>
       </div>
-
       <h2>Effects</h2>
       <div class="fieldRow fieldRow2">
         <label for="zoomMode" class="inlineLabel">Zoom mode</label>
@@ -49,36 +43,30 @@
           <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
         </select>
       </div>
-
       <div class="sliderRow">
         <div class="sliderLabel">Zoom strength</div>
         <div id="zoomStrengthValue" class="sliderValue">0.18</div>
         <input id="zoomStrength" type="range" min="0" max="1" step="0.01" value="0.18" />
       </div>
-
       <div class="sliderRow">
         <div class="sliderLabel">Bounce strength</div>
         <div id="bounceStrengthValue" class="sliderValue">0.16</div>
         <input id="bounceStrength" type="range" min="0" max="1" step="0.01" value="0.16" />
       </div>
-
       <div class="sliderRow">
         <div class="sliderLabel">Beat sensitivity</div>
         <div id="beatSensitivityValue" class="sliderValue">0.55</div>
         <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
       </div>
-
       <div class="sliderRow">
         <div class="sliderLabel">Motion blur strength</div>
         <div id="motionBlurStrengthValue" class="sliderValue">0.00</div>
         <input id="motionBlurStrength" type="range" min="0" max="1" step="0.01" value="0.00" />
       </div>
-
       <div class="row">
-        <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
         <button id="analyzeBtn" class="secondary">Analyze Beats</button>
+        <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
       </div>
-
       <h2>Render</h2>
       <div class="fieldRow fieldRow2">
         <label for="preset" class="inlineLabel">Preset</label>
@@ -88,12 +76,10 @@
           <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
         </select>
       </div>
-
       <div class="fieldRow fieldRow2">
         <label for="outputPath" class="inlineLabel">Output path</label>
         <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
       </div>
-
       <div class="fieldRow fieldRow2">
         <label for="encoder" class="inlineLabel">Video encoder</label>
         <select id="encoder">
@@ -104,13 +90,11 @@
           <option value="amd">AMD (AMF)</option>
         </select>
       </div>
-
       <div class="row">
         <button id="previewBtn" class="secondary">Render Preview</button>
         <button id="exportBtn">Export Final</button>
       </div>
     </section>
-
     <section class="panel">
       <h2>Status</h2>
       <div class="progressWrap">
@@ -118,14 +102,11 @@
         <div id="etaInfo" class="eta">Idle</div>
       </div>
       <pre id="statusInfo">Idle.</pre>
-
       <h2>Project</h2>
       <pre id="projectInfo">No video loaded.</pre>
     </section>
   </main>
-
-  <script type="module" src="./app.js?v=20260312-2"></script>
+  <script type="module" src="./app.js?v=20260319-1"></script>
 </body>
 </html>
-
 

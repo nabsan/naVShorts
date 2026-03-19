@@ -11,7 +11,7 @@
       {
         "label": "main",
         "title": "naVShorts",
-        "url": "reframe.html",
+        "url": "reframe_assist.html",
         "width": 1200,
         "height": 860,
         "resizable": true,
@@ -37,3 +37,4 @@
     }
   }
 }
+

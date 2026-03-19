@@ -1,0 +1,112 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>naVShorts - Settings</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="./assets/navshorts-icon-64.png" alt="naVShorts icon" class="brandIcon" />
+      <div>
+        <div class="brandName">naVShorts</div>
+        <div class="brandSub">Vertical video workflow studio</div>
+      </div>
+    </div>
+    <nav class="tabs" aria-label="Workspace tabs">
+      <a class="tab" href="./reframe_assist.html">1. Pre Reframe</a>
+      <a class="tab" href="./reframe.html">2. Reframe</a>
+      <a class="tab" href="./index.html">3. Effects</a>
+      <a class="tab active" href="./settings.html">4. Settings</a>
+    </nav>
+  </header>
+
+  <main class="layout settingsLayout">
+    <section class="panel settingsPanel">
+      <h1>Settings</h1>
+      <p class="sub">Step 4: Manage shared runtime settings, default folders, and the first mode each workspace should open with.</p>
+
+      <div class="fieldRow fieldRow2">
+        <label for="configPath" class="inlineLabel">Config file</label>
+        <input id="configPath" readonly />
+      </div>
+
+      <div class="fieldRow fieldRow3 settingsFieldRow3">
+        <label for="targetFaceFolder" class="inlineLabel">Default target face folder</label>
+        <input id="targetFaceFolder" placeholder="Blank = no default target folder" />
+        <button id="pickTargetFaceFolderBtn" class="secondary">Pick Folder</button>
+      </div>
+
+      <div class="fieldRow fieldRow3 settingsFieldRow3">
+        <label for="assistJsonDir" class="inlineLabel">Default Assist JSON directory</label>
+        <input id="assistJsonDir" placeholder="Blank = same folder as source video" />
+        <button id="pickAssistJsonDirBtn" class="secondary">Pick Folder</button>
+      </div>
+
+      <div class="fieldRow fieldRow3 settingsFieldRow3">
+        <label for="previewProxyDir" class="inlineLabel">Preview proxy directory</label>
+        <input id="previewProxyDir" placeholder="Blank = system temp directory" />
+        <button id="pickPreviewProxyDirBtn" class="secondary">Pick Folder</button>
+      </div>
+
+      <h2>Workspace Defaults</h2>
+
+      <div class="fieldRow fieldRow2">
+        <label for="preReframeDefaultEngine" class="inlineLabel">Pre Reframe default engine</label>
+        <select id="preReframeDefaultEngine">
+          <option value="yoloBytetrackArcface">Assist with YOLO + ByteTrack + ArcFace</option>
+          <option value="faceIdentity">Assist with Face Identity (ONNX)</option>
+          <option value="yoloDeepsortPerson">Assist with YOLO + DeepSORT</option>
+          <option value="manualOnly">Manual only</option>
+        </select>
+      </div>
+
+      <div class="fieldRow fieldRow2">
+        <label for="reframeDefaultEngine" class="inlineLabel">Reframe default engine</label>
+        <select id="reframeDefaultEngine">
+          <option value="manualAssistJson">Manual Assist JSON</option>
+          <option value="yoloBytetrackArcface">Person YOLO + ByteTrack + ArcFace</option>
+          <option value="yoloDeepsortPerson">Person YOLO + DeepSORT</option>
+          <option value="faceIdentity">Face Identity (ONNX)</option>
+        </select>
+      </div>
+
+      <div class="fieldRow fieldRow2">
+        <label for="effectsDefaultZoomMode" class="inlineLabel">Effects default zoom mode</label>
+        <select id="effectsDefaultZoomMode">
+          <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
+          <option value="zoomIn">Zoom In</option>
+          <option value="zoomOut">Zoom Out</option>
+          <option value="zoomInOutBeat">Zoom In &amp; Out to Beat</option>
+          <option value="zoomInOutLoop">Zoom In &amp; Out Loop</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <button id="reloadConfigBtn" class="secondary">Reload Settings</button>
+        <button id="saveConfigBtn">Save Settings</button>
+      </div>
+
+      <div class="row">
+        <button id="resetUiStateBtn" class="secondary">Reset Remembered UI State</button>
+        <button id="verifyBtn" class="secondary">Verify FFmpeg / ONNX</button>
+      </div>
+
+      <div class="assistHelp">
+        Settings are stored in <code>naVShorts.config</code> next to the executable when possible. If that location is not writable, the app falls back to Local AppData.
+      </div>
+
+      <h2>Status</h2>
+      <pre id="statusInfo">Idle.</pre>
+
+      <h2>Current Config</h2>
+      <pre id="configInfo">No config loaded.</pre>
+    </section>
+  </main>
+
+  <script type="module" src="./settings.js?v=20260319-4"></script>
+</body>
+</html>

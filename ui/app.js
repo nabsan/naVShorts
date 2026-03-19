@@ -15,6 +15,10 @@ const tauriInvoke = resolveInvoke();
 const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "naVShorts.effects.v1";
+const RESET_NOTICE_KEY = "naVShorts.resetNotice.v1";
+const appConfig = {
+  defaultEffectsZoomMode: "zoomSineSmooth",
+};
 
 const videoPath = $("videoPath");
 const outputPath = $("outputPath");
@@ -62,6 +66,14 @@ function buildDefaultOutputPath(inputFullPath) {
   return `${dir}${base}_exported_${timestampYYMMDDhhmmss()}${ext}`;
 }
 
+function buildPreviewOutputPath(currentOutputPath, inputFullPath) {
+  const source = (currentOutputPath || "").trim() || buildDefaultOutputPath(inputFullPath || videoPath.value.trim());
+  const normalized = source.replace(/\//g, "\\");
+  const dot = normalized.lastIndexOf(".");
+  if (dot > 0) return `${normalized.slice(0, dot)}_preview${normalized.slice(dot)}`;
+  return `${normalized}_preview.mp4`;
+}
+
 function printProject(data) {
   projectInfo.textContent = JSON.stringify(data, null, 2);
 }
@@ -83,6 +95,34 @@ function syncSliderLabels() {
 function setProgress(progress, etaText) {
   renderProgress.value = Number.isFinite(progress) ? Math.min(Math.max(progress, 0), 1) : 0;
   etaInfo.textContent = etaText;
+}
+
+function showResetNoticeIfNeeded() {
+  try {
+    const raw = localStorage.getItem(RESET_NOTICE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    if (!payload?.message) return;
+    printStatus(payload.message);
+    setProgress(0, "Notice");
+  } catch {
+    // ignore invalid notice
+  }
+}
+
+async function loadAppConfigDefaults() {
+  try {
+    const cfg = await invoke("get_app_config");
+    appConfig.defaultEffectsZoomMode = cfg.effectsDefaultZoomMode || "zoomSineSmooth";
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    let saved = null;
+    try { saved = raw ? JSON.parse(raw) : null; } catch {}
+    if (!saved || typeof saved.zoomMode !== "string") {
+      zoomMode.value = appConfig.defaultEffectsZoomMode || "zoomSineSmooth";
+    }
+  } catch {
+    // ignore config load failures
+  }
 }
 
 function loadSettings() {
@@ -116,8 +156,12 @@ function saveSettings() {
 }
 
 loadSettings();
+loadAppConfigDefaults().then(() => {
+  saveSettings();
+});
 syncSliderLabels();
 setProgress(0, "Idle");
+showResetNoticeIfNeeded();
 
 [zoomStrength, bounceStrength, beatSensitivity, motionBlurStrength].forEach((el) => {
   el.addEventListener("input", () => {
@@ -144,14 +188,47 @@ async function refreshProject() {
   printProject(project);
 }
 
-$("verifyBtn").addEventListener("click", async () => {
-  try {
-    const result = await invoke("verify_runtime_tools");
-    printStatus(result);
-  } catch (e) {
-    printStatus(String(e));
-  }
-});
+function buildEffectsPayload() {
+  return {
+    zoomMode: zoomMode.value,
+    zoomStrength: Number(zoomStrength.value),
+    bounceStrength: Number(bounceStrength.value),
+    beatSensitivity: Number(beatSensitivity.value),
+    motionBlurStrength: Number(motionBlurStrength.value),
+  };
+}
+
+async function applyEffects() {
+  saveSettings();
+  const project = await invoke("set_effects", {
+    config: buildEffectsPayload(),
+  });
+  printProject(project);
+  return project;
+}
+
+async function analyzeBeats() {
+  const path = videoPath.value.trim();
+  if (!path) throw new Error("Load a video before analyzing beats.");
+  const beats = await invoke("analyze_beats", {
+    path,
+    sensitivity: Number(beatSensitivity.value),
+  });
+  await refreshProject();
+  return beats;
+}
+
+async function prepareEffectsForRender(kindLabel) {
+  const path = videoPath.value.trim();
+  if (!path) throw new Error("Load a video before rendering.");
+  setProgress(0, `Auto analyze/apply running for ${kindLabel}...`);
+  printStatus(`Auto analyze/apply running for ${kindLabel}: analyzing beats...`);
+  const beats = await analyzeBeats();
+  setProgress(0, `Auto analyze/apply running for ${kindLabel}...`);
+  printStatus(`Auto analyze/apply running for ${kindLabel}: applying effects after ${beats.points.length} beat points...`);
+  await applyEffects();
+  printStatus(`Auto analyze/apply complete for ${kindLabel}. Beat points: ${beats.points.length}`);
+}
 
 $("openBtn").addEventListener("click", async () => {
   try {
@@ -175,16 +252,7 @@ $("openBtn").addEventListener("click", async () => {
 
 $("saveEffectsBtn").addEventListener("click", async () => {
   try {
-    saveSettings();
-    const project = await invoke("set_effects", {
-      config: {
-        zoomMode: zoomMode.value,
-        zoomStrength: Number(zoomStrength.value),
-        bounceStrength: Number(bounceStrength.value),
-        beatSensitivity: Number(beatSensitivity.value),
-        motionBlurStrength: Number(motionBlurStrength.value),
-      },
-    });
+    const project = await applyEffects();
     printProject(project);
     printStatus("Effects updated.");
   } catch (e) {
@@ -195,12 +263,8 @@ $("saveEffectsBtn").addEventListener("click", async () => {
 $("analyzeBtn").addEventListener("click", async () => {
   try {
     printStatus("Analyzing beats...");
-    const beats = await invoke("analyze_beats", {
-      path: videoPath.value.trim(),
-      sensitivity: Number(beatSensitivity.value),
-    });
+    const beats = await analyzeBeats();
     printStatus(`Beat analysis complete: ${beats.points.length} points`);
-    await refreshProject();
   } catch (e) {
     printStatus(String(e));
   }
@@ -209,9 +273,14 @@ $("analyzeBtn").addEventListener("click", async () => {
 async function startRender(preview) {
   try {
     saveSettings();
+    const renderKind = preview ? "preview" : "export";
+    await prepareEffectsForRender(renderKind);
+    const finalOutputPath = preview
+      ? buildPreviewOutputPath(outputPath.value.trim(), videoPath.value.trim())
+      : outputPath.value.trim();
     const jobId = await invoke("render", {
       request: {
-        outputPath: outputPath.value.trim(),
+        outputPath: finalOutputPath,
         preset: preset.value,
         preview,
         encoder: encoder.value,
@@ -219,8 +288,8 @@ async function startRender(preview) {
     });
 
     const startedAt = Date.now();
-    setProgress(0, "Starting...");
-    printStatus({ jobId, state: "queued" });
+    setProgress(0, preview ? "Starting preview render..." : "Starting export...");
+    printStatus({ jobId, state: "queued", outputPath: finalOutputPath, mode: renderKind });
 
     const timer = setInterval(async () => {
       try {
@@ -234,7 +303,7 @@ async function startRender(preview) {
           const remainSec = Math.max(0, totalSec - elapsedSec);
           setProgress(p, `Progress ${(p * 100).toFixed(1)}% | ETA ${Math.ceil(remainSec)}s`);
         } else if (status.state === "completed") {
-          setProgress(1, "Completed");
+          setProgress(1, preview ? "Preview completed" : "Completed");
         } else if (status.state === "failed" || status.state === "cancelled") {
           setProgress(p, `Stopped (${status.state})`);
         }
@@ -250,6 +319,7 @@ async function startRender(preview) {
     }, 800);
   } catch (e) {
     printStatus(String(e));
+    setProgress(0, "Error");
   }
 }
 

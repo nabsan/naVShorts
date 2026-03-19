@@ -124,3 +124,4 @@ npm.cmd run tauri dev
 - `1B` now shows the current interpolated box by default, with optional full-anchor overlay.
 - Added keyboard shortcuts in `1B`: `Space`, `J`, `L`, `Left`, `Right`.
 
+

@@ -380,3 +380,26 @@ pre {
   text-align: center;
   box-shadow: inset 0 -1px 0 rgba(14, 37, 64, 0.08);
 }
+
+.settingsLayout {
+  grid-template-columns: 1fr;
+}
+
+.settingsPanel {
+  max-width: 1120px;
+}
+
+.settingsFieldRow3 {
+  grid-template-columns: 220px minmax(0, 1fr) 150px;
+}
+
+.settingsPanel #statusInfo,
+.settingsPanel #configInfo {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.settingsPanel #configInfo {
+  min-height: 260px;
+}

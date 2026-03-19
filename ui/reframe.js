@@ -15,7 +15,15 @@ const tauriInvoke = resolveInvoke();
 const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "naVShorts.reframe.v2";
+const RESET_NOTICE_KEY = "naVShorts.resetNotice.v1";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
+const appConfig = {
+  targetFaceFolder: DEFAULT_FACE_FOLDER,
+  assistJsonDir: "",
+  previewProxyDir: "",
+  configPath: "",
+  defaultReframeEngine: "manualAssistJson",
+};
 const ENGINE_PRESETS = {
   faceIdentity: { trackingStrength: 0.78, identityThreshold: 0.58, stability: 0.76 },
   yoloDeepsortPerson: { trackingStrength: 0.80, identityThreshold: 0.60, stability: 0.74 },
@@ -61,6 +69,12 @@ function timestampYYMMDDhhmmss(d = new Date()) {
   const mi = pad2(d.getMinutes());
   const ss = pad2(d.getSeconds());
   return `${yy}${mm}${dd}${hh}${mi}${ss}`;
+}
+
+function directoryOf(pathValue) {
+  const normalized = (pathValue || "").replace(/\//g, "\\");
+  const lastSlash = normalized.lastIndexOf("\\");
+  return lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
 }
 
 function buildOutputPath(inputFullPath) {
@@ -141,6 +155,30 @@ function bindSlider(inputEl, labelEl) {
   });
   inputEl.addEventListener("change", saveSettings);
   sync();
+}
+
+async function loadAppConfigDefaults() {
+  try {
+    const cfg = await invoke("get_app_config");
+    appConfig.targetFaceFolder = cfg.targetFaceFolder || DEFAULT_FACE_FOLDER;
+    appConfig.assistJsonDir = cfg.assistJsonDir || "";
+    appConfig.previewProxyDir = cfg.previewProxyDir || "";
+    appConfig.configPath = cfg.configPath || "";
+    appConfig.defaultReframeEngine = cfg.reframeDefaultEngine || "manualAssistJson";
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    let saved = null;
+    try { saved = raw ? JSON.parse(raw) : null; } catch {}
+    if ((!saved || typeof saved.trackingEngine !== "string") && trackingEngine) {
+      trackingEngine.value = appConfig.defaultReframeEngine || "manualAssistJson";
+      currentEngineKey = getSelectedEngine();
+      applyEngineSettings(currentEngineKey, getEnginePreset(currentEngineKey), false);
+    }
+    if (!targetFacePath.value.trim() || targetFacePath.value.trim() === DEFAULT_FACE_FOLDER) {
+      targetFacePath.value = appConfig.targetFaceFolder || DEFAULT_FACE_FOLDER;
+    }
+  } catch {
+    // ignore config load failures
+  }
 }
 
 function loadSettings() {
@@ -308,6 +346,9 @@ async function startReframeRender(preview) {
 }
 
 loadSettings();
+loadAppConfigDefaults().then(() => {
+  saveSettings();
+});
 bindSlider(trackingStrength, trackingStrengthValue);
 bindSlider(identityThreshold, identityThresholdValue);
 bindSlider(stability, stabilityValue);
@@ -316,103 +357,6 @@ updateTrackingEngineUi();
 encoder.addEventListener("change", saveSettings);
 if (trackingEngine) trackingEngine.addEventListener("change", handleTrackingEngineChange);
 
-$("verifyBtn").addEventListener("click", verifyTools);
-
-if (pickTargetFaceBtn) {
-  pickTargetFaceBtn.addEventListener("click", async () => {
-    try {
-      const picked = await invoke("pick_folder");
-      if (!picked) {
-        printStatus("Face folder selection cancelled.");
-        return;
-      }
-      targetFacePath.value = picked;
-      saveSettings();
-      printStatus("Target face folder selected.");
-    } catch (e) {
-      printStatus(String(e));
-    }
-  });
-}
-
-if (pickAssistJsonBtn) {
-  pickAssistJsonBtn.addEventListener("click", async () => {
-    try {
-      const picked = await invoke("pick_json_file");
-      if (!picked) {
-        printStatus("Assist JSON selection cancelled.");
-        return;
-      }
-      assistJsonPath.value = picked;
-      const assistProject = await invoke("load_manual_assist_json", { path: picked });
-      if (typeof assistProject.sourceVideo === "string" && assistProject.sourceVideo.trim()) {
-        sourceVideoPath.value = assistProject.sourceVideo;
-        await invoke("open_video", { path: assistProject.sourceVideo });
-        reframeOutputPath.value = buildOutputPath(assistProject.sourceVideo);
-      }
-      if (typeof assistProject.targetFacePath === "string" && assistProject.targetFacePath.trim()) {
-        targetFacePath.value = assistProject.targetFacePath;
-      }
-      trackingEngine.value = "manualAssistJson";
-      handleTrackingEngineChange();
-      saveSettings();
-      printStatus("Assist JSON selected.");
-    } catch (e) {
-      printStatus(String(e));
-    }
-  });
-}
-
-if (scoreFaceFolderBtn) {
-  scoreFaceFolderBtn.addEventListener("click", async () => {
-    try {
-      const folder = (targetFacePath.value || "").trim();
-      if (!folder) {
-        printStatus("Target face folder path is empty.");
-        return;
-      }
-      printStatus("Scoring face folder...");
-      const result = await invoke("score_face_folder", { path: folder });
-      printStatus(result);
-    } catch (e) {
-      printStatus(String(e));
-    }
-  });
-}
-
-if (moveExcludedBtn) {
-  moveExcludedBtn.addEventListener("click", async () => {
-    try {
-      const folder = (targetFacePath.value || "").trim();
-      if (!folder) {
-        printStatus("Target face folder path is empty.");
-        return;
-      }
-      printStatus("Scoring and moving excluded files to botu...");
-      const result = await invoke("score_and_move_face_folder", { path: folder });
-      printStatus(result);
-    } catch (e) {
-      printStatus(String(e));
-    }
-  });
-}
-
-$("openSourceBtn").addEventListener("click", async () => {
-  try {
-    const picked = await invoke("pick_video_file");
-    if (!picked) {
-      printStatus("Video selection cancelled.");
-      return;
-    }
-    sourceVideoPath.value = picked;
-    await invoke("open_video", { path: picked });
-    reframeOutputPath.value = buildOutputPath(picked);
-    printStatus("Source video loaded for Reframe.");
-    await refreshProject();
-  } catch (e) {
-    printStatus(String(e));
-  }
-});
 
 $("previewBtn").addEventListener("click", () => startReframeRender(true));
 $("exportBtn").addEventListener("click", () => startReframeRender(false));
@@ -461,7 +405,13 @@ if (!tauriInvoke) {
 }
 
 setProgress(0, "Idle");
-verifyTools().catch(() => {});
 refreshProject().catch(() => {});
+
+
+
+
+
+
+
 
 

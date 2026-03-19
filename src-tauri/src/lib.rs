@@ -243,6 +243,233 @@ struct AppState {
     renders: Mutex<HashMap<String, Arc<Mutex<RenderStatus>>>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfigPayload {
+    pub target_face_folder: String,
+    pub assist_json_dir: String,
+    pub preview_proxy_dir: String,
+    pub pre_reframe_default_engine: String,
+    pub reframe_default_engine: String,
+    pub effects_default_zoom_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfigResponse {
+    pub target_face_folder: String,
+    pub assist_json_dir: String,
+    pub preview_proxy_dir: String,
+    pub pre_reframe_default_engine: String,
+    pub reframe_default_engine: String,
+    pub effects_default_zoom_mode: String,
+    pub config_path: String,
+    pub config_scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiStateBackupResponse {
+    pub backup_path: String,
+    pub backup_scope: String,
+}
+
+fn default_target_face_folder_value() -> String {
+    let default_dir = PathBuf::from(r"S:\tools\codex\waka_images");
+    if default_dir.exists() {
+        default_dir.display().to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn default_app_config_payload() -> AppConfigPayload {
+    AppConfigPayload {
+        target_face_folder: default_target_face_folder_value(),
+        assist_json_dir: String::new(),
+        preview_proxy_dir: String::new(),
+        pre_reframe_default_engine: "yoloBytetrackArcface".to_string(),
+        reframe_default_engine: "manualAssistJson".to_string(),
+        effects_default_zoom_mode: "zoomSineSmooth".to_string(),
+    }
+}
+
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn primary_app_config_path() -> PathBuf {
+    exe_dir().join("naVShorts.config")
+}
+
+fn fallback_app_config_path() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("naVShorts")
+        .join("naVShorts.config")
+}
+
+fn config_scope_for_path(path: &Path) -> &'static str {
+    if path == primary_app_config_path() {
+        "exe-dir"
+    } else {
+        "localappdata"
+    }
+}
+
+fn load_app_config_internal() -> Result<(AppConfigPayload, PathBuf, String), String> {
+    let primary = primary_app_config_path();
+    let fallback = fallback_app_config_path();
+    let path = if primary.exists() {
+        primary.clone()
+    } else if fallback.exists() {
+        fallback.clone()
+    } else {
+        primary.clone()
+    };
+
+    if !path.exists() {
+        let scope = config_scope_for_path(&path).to_string();
+        return Ok((default_app_config_payload(), path, scope));
+    }
+
+    let text = fs::read_to_string(&path).map_err(|e| format!("failed to read app config: {e}"))?;
+    let mut payload = serde_json::from_str::<AppConfigPayload>(&text)
+        .map_err(|e| format!("invalid app config json: {e}"))?;
+    if payload.target_face_folder.trim().is_empty() {
+        payload.target_face_folder = default_target_face_folder_value();
+    }
+    if payload.pre_reframe_default_engine.trim().is_empty() {
+        payload.pre_reframe_default_engine = "yoloBytetrackArcface".to_string();
+    }
+    if payload.reframe_default_engine.trim().is_empty() {
+        payload.reframe_default_engine = "manualAssistJson".to_string();
+    }
+    if payload.effects_default_zoom_mode.trim().is_empty() {
+        payload.effects_default_zoom_mode = "zoomSineSmooth".to_string();
+    }
+    let scope = config_scope_for_path(&path).to_string();
+    Ok((payload, path, scope))
+}
+
+fn app_config_response(payload: AppConfigPayload, path: PathBuf, scope: String) -> AppConfigResponse {
+    AppConfigResponse {
+        target_face_folder: payload.target_face_folder,
+        assist_json_dir: payload.assist_json_dir,
+        preview_proxy_dir: payload.preview_proxy_dir,
+        pre_reframe_default_engine: payload.pre_reframe_default_engine,
+        reframe_default_engine: payload.reframe_default_engine,
+        effects_default_zoom_mode: payload.effects_default_zoom_mode,
+        config_path: path.display().to_string(),
+        config_scope: scope,
+    }
+}
+
+fn save_app_config_internal(mut payload: AppConfigPayload) -> Result<AppConfigResponse, String> {
+    if payload.target_face_folder.trim().is_empty() {
+        payload.target_face_folder = default_target_face_folder_value();
+    }
+    if payload.pre_reframe_default_engine.trim().is_empty() {
+        payload.pre_reframe_default_engine = "yoloBytetrackArcface".to_string();
+    }
+    if payload.reframe_default_engine.trim().is_empty() {
+        payload.reframe_default_engine = "manualAssistJson".to_string();
+    }
+    if payload.effects_default_zoom_mode.trim().is_empty() {
+        payload.effects_default_zoom_mode = "zoomSineSmooth".to_string();
+    }
+
+    let primary = primary_app_config_path();
+    let fallback = fallback_app_config_path();
+    let target = if primary.exists() {
+        primary.clone()
+    } else if fallback.exists() {
+        fallback.clone()
+    } else {
+        primary.clone()
+    };
+
+    let json = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("failed to serialize app config: {e}"))?;
+
+    let write_to = |path: &Path| -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("failed to create config directory: {e}"))?;
+        }
+        fs::write(path, &json).map_err(|e| format!("failed to write app config: {e}"))
+    };
+
+    match write_to(&target) {
+        Ok(()) => Ok(app_config_response(payload, target.clone(), config_scope_for_path(&target).to_string())),
+        Err(err) => {
+            if target == fallback {
+                Err(err)
+            } else {
+                write_to(&fallback)?;
+                Ok(app_config_response(payload, fallback.clone(), config_scope_for_path(&fallback).to_string()))
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn get_app_config() -> Result<AppConfigResponse, String> {
+    let (payload, path, scope) = load_app_config_internal()?;
+    Ok(app_config_response(payload, path, scope))
+}
+
+#[tauri::command]
+fn save_app_config(config: AppConfigPayload) -> Result<AppConfigResponse, String> {
+    save_app_config_internal(config)
+}
+
+#[tauri::command]
+fn backup_ui_state_snapshot(snapshot: serde_json::Value) -> Result<UiStateBackupResponse, String> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let file_name = format!("naVShorts.ui-state-backup-{}.json", stamp);
+    let primary = exe_dir().join(&file_name);
+    let fallback_root = fallback_app_config_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let fallback = fallback_root.join(&file_name);
+    let json = serde_json::to_string_pretty(&snapshot)
+        .map_err(|e| format!("failed to serialize ui state backup: {e}"))?;
+
+    let write_to = |path: &Path| -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("failed to create backup directory: {e}"))?;
+        }
+        fs::write(path, &json).map_err(|e| format!("failed to write ui state backup: {e}"))
+    };
+
+    match write_to(&primary) {
+        Ok(()) => Ok(UiStateBackupResponse {
+            backup_path: primary.display().to_string(),
+            backup_scope: "exe-dir".to_string(),
+        }),
+        Err(err) => {
+            if write_to(&fallback).is_ok() {
+                Ok(UiStateBackupResponse {
+                    backup_path: fallback.display().to_string(),
+                    backup_scope: "localappdata".to_string(),
+                })
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+
 #[tauri::command]
 fn pick_video_file() -> Result<Option<String>, String> {
     let picked = FileDialog::new()
@@ -263,10 +490,24 @@ fn pick_image_file() -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn pick_folder() -> Result<Option<String>, String> {
-    let default_dir = PathBuf::from(r"S:\tools\codex\waka_images");
+    pick_folder_with_default(None)
+}
+
+#[tauri::command]
+fn pick_folder_with_default(start_dir: Option<String>) -> Result<Option<String>, String> {
     let mut dialog = FileDialog::new();
-    if default_dir.exists() {
-        dialog = dialog.set_directory(&default_dir);
+    let configured = start_dir
+        .and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        })
+        .or_else(|| load_app_config_internal().ok().map(|(cfg, _, _)| cfg.target_face_folder))
+        .unwrap_or_else(default_target_face_folder_value);
+    if !configured.trim().is_empty() {
+        let dir = PathBuf::from(configured.trim());
+        if dir.exists() {
+            dialog = dialog.set_directory(&dir);
+        }
     }
     let picked = dialog.pick_folder();
     Ok(picked.map(|p| p.display().to_string()))
@@ -274,11 +515,29 @@ fn pick_folder() -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn pick_json_file() -> Result<Option<String>, String> {
-    let picked = FileDialog::new()
-        .add_filter("JSON", &["json"])
-        .pick_file();
+    pick_json_file_with_default(None)
+}
+
+#[tauri::command]
+fn pick_json_file_with_default(start_dir: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = FileDialog::new().add_filter("JSON", &["json"]);
+    let configured = start_dir
+        .and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        })
+        .or_else(|| load_app_config_internal().ok().map(|(cfg, _, _)| cfg.assist_json_dir))
+        .unwrap_or_default();
+    if !configured.trim().is_empty() {
+        let dir = PathBuf::from(configured.trim());
+        if dir.exists() {
+            dialog = dialog.set_directory(&dir);
+        }
+    }
+    let picked = dialog.pick_file();
     Ok(picked.map(|p| p.display().to_string()))
 }
+
 
 fn load_manual_assist_project(path: &Path) -> Result<ManualAssistProject, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("failed to read assist json: {e}"))?;
@@ -342,9 +601,19 @@ fn create_preview_video(path: String) -> Result<String, String> {
         return Err(format!("Input file does not exist: {}", path));
     }
     let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
-    let preview = create_preview_proxy(&ffmpeg, &input).map_err(|e| format!("{e:#}"))?;
+    let preview_dir = load_app_config_internal()
+        .ok()
+        .map(|(cfg, _, _)| cfg.preview_proxy_dir)
+        .unwrap_or_default();
+    let preview_root = if preview_dir.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(preview_dir.trim()))
+    };
+    let preview = create_preview_proxy(&ffmpeg, &input, preview_root.as_deref()).map_err(|e| format!("{e:#}"))?;
     Ok(preview.display().to_string())
 }
+
 
 #[tauri::command]
 fn inspect_preview_video(path: String) -> Result<serde_json::Value, String> {
@@ -1635,7 +1904,12 @@ pub fn run() {
             pick_video_file,
             pick_image_file,
             pick_folder,
+            pick_folder_with_default,
             pick_json_file,
+            pick_json_file_with_default,
+            get_app_config,
+            save_app_config,
+            backup_ui_state_snapshot,
             open_video,
             create_preview_video,
             inspect_preview_video,
@@ -1719,6 +1993,14 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
+
+
+
+
+
 
 
 

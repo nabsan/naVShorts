@@ -22,7 +22,15 @@ const tauriInvoke = resolveInvoke();
 const convertFileSrc = resolveConvertFileSrc();
 const $ = (id) => document.getElementById(id);
 const SETTINGS_KEY = "naVShorts.reframeAssist.v5";
+const RESET_NOTICE_KEY = "naVShorts.resetNotice.v1";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
+const appConfig = {
+  targetFaceFolder: DEFAULT_FACE_FOLDER,
+  assistJsonDir: "",
+  previewProxyDir: "",
+  configPath: "",
+  defaultAssistTrackingEngine: "yoloBytetrackArcface",
+};
 
 const sourceVideoPath = $("sourceVideoPath");
 const assistJsonPath = $("assistJsonPath");
@@ -143,10 +151,18 @@ function timestampYYMMDDhhmmss(d = new Date()) {
   return `${pad2(d.getFullYear() % 100)}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
 }
 
+function directoryOf(pathValue) {
+  const normalized = (pathValue || "").replace(/\//g, "\\");
+  const lastSlash = normalized.lastIndexOf("\\");
+  return lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
+}
+
 function buildJsonPath(inputFullPath) {
   const normalized = inputFullPath.replace(/\//g, "\\");
   const lastSlash = normalized.lastIndexOf("\\");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
+  const configuredDir = (appConfig.assistJsonDir || "").trim();
+  const baseDir = configuredDir ? configuredDir.replace(/\//g, "\\") : (lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "");
+  const dir = baseDir.endsWith("\\") ? baseDir : (baseDir ? `${baseDir}\\` : "");
   const file = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
   const dot = file.lastIndexOf(".");
   const base = dot > 0 ? file.slice(0, dot) : file;
@@ -189,6 +205,31 @@ function loadSettings() {
     if (showAllAnchors) showAllAnchors.checked = Boolean(s.showAllAnchors);
   } catch {
     // ignore
+  }
+}
+
+async function loadAppConfigDefaults() {
+  try {
+    const cfg = await invoke("get_app_config");
+    appConfig.targetFaceFolder = cfg.targetFaceFolder || DEFAULT_FACE_FOLDER;
+    appConfig.assistJsonDir = cfg.assistJsonDir || "";
+    appConfig.previewProxyDir = cfg.previewProxyDir || "";
+    appConfig.configPath = cfg.configPath || "";
+    appConfig.defaultAssistTrackingEngine = cfg.preReframeDefaultEngine || "yoloBytetrackArcface";
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    let saved = null;
+    try { saved = raw ? JSON.parse(raw) : null; } catch {}
+    if (!saved || typeof saved.assistTrackingEngine !== "string") {
+      assistTrackingEngine.value = appConfig.defaultAssistTrackingEngine || "yoloBytetrackArcface";
+    }
+    if (targetFacePath && (!targetFacePath.value.trim() || targetFacePath.value.trim() === DEFAULT_FACE_FOLDER)) {
+      targetFacePath.value = appConfig.targetFaceFolder || DEFAULT_FACE_FOLDER;
+    }
+    if (sourceVideoPath.value.trim() && !assistJsonPath.value.trim()) {
+      assistJsonPath.value = buildJsonPath(sourceVideoPath.value.trim());
+    }
+  } catch {
+    // ignore config load failures
   }
 }
 
@@ -629,6 +670,10 @@ assistVideo.addEventListener("timeupdate", () => {
 window.addEventListener("resize", syncOverlaySize);
 
 loadSettings();
+loadAppConfigDefaults().then(() => {
+  saveSettings();
+  updateDiagnostics({}, true);
+});
 bindSlider(stability, stabilityValue);
 playbackRate.addEventListener("change", () => {
   assistVideo.playbackRate = Number(playbackRate.value || 1);
@@ -643,19 +688,11 @@ if (showAllAnchors) {
 }
 assistVideo.playbackRate = Number(playbackRate.value || 1);
 
-$("verifyBtn").addEventListener("click", async () => {
-  try {
-    const ff = await invoke("verify_runtime_tools");
-    printStatus({ ffmpeg: ff, message: "Runtime tools verified." });
-  } catch (e) {
-    printStatus(String(e));
-  }
-});
 $("openSourceBtn").addEventListener("click", openSourceVideo);
 if (pickTargetFaceBtn) {
   pickTargetFaceBtn.addEventListener("click", async () => {
     try {
-      const picked = await invoke("pick_folder");
+      const picked = await invoke("pick_folder_with_default", { startDir: targetFacePath.value.trim() || appConfig.targetFaceFolder || null });
       if (!picked) {
         printStatus("Face folder selection cancelled.");
         return;
@@ -727,7 +764,7 @@ $("clearAnchorsBtn").addEventListener("click", () => {
 $("saveJsonBtn").addEventListener("click", saveAssistJson);
 $("loadJsonBtn").addEventListener("click", async () => {
   try {
-    const picked = await invoke("pick_json_file");
+    const picked = await invoke("pick_json_file_with_default", { startDir: directoryOf(assistJsonPath.value) || appConfig.assistJsonDir || directoryOf(sourceVideoPath.value) || null });
     if (!picked) {
       printStatus("Assist JSON selection cancelled.");
       return;
@@ -756,5 +793,11 @@ setProgress(0, "Idle");
 renderAnchors();
 updateMeta();
 updateDiagnostics({}, true);
+
+
+
+
+
+
 
 

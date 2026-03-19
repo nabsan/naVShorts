@@ -1044,7 +1044,7 @@ pub fn estimate_face_track_points(
     Ok(compress_track_points(&points, max_points, alpha, stab))
 }
 
-pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path) -> Result<PathBuf> {
+pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path, output_root: Option<&Path>) -> Result<PathBuf> {
     let metadata = fs::metadata(input_video)
         .with_context(|| format!("failed to stat source video {}", input_video.display()))?;
     let modified_ms = metadata
@@ -1062,7 +1062,13 @@ pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path) -> Result<Pa
     let mut hasher = DefaultHasher::new();
     cache_profile.hash(&mut hasher);
     let cache_key = hasher.finish();
-    let out_path = env::temp_dir().join(format!("navshorts_assist_preview_{cache_key:016x}.mp4"));
+    let preview_root = output_root
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(env::temp_dir);
+    fs::create_dir_all(&preview_root)
+        .with_context(|| format!("failed to create preview directory {}", preview_root.display()))?;
+    let out_path = preview_root.join(format!("navshorts_assist_preview_{cache_key:016x}.mp4"));
     if out_path.exists() {
         let cached_size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
         if cached_size > 0 {
@@ -2263,6 +2269,7 @@ mod tests {
         assert!(g.contains("if(lt(t,1.00000)"));
     }
 }
+
 
 
 

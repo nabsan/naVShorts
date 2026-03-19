@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>naVShorts - Reframe Assist</title>
+  <title>naVShorts - Pre Reframe</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -16,33 +16,26 @@
       </div>
     </div>
     <nav class="tabs" aria-label="Workspace tabs">
-      <a class="tab" href="./reframe.html">1. Reframe</a>
-      <a class="tab active" href="./reframe_assist.html">1B. Reframe Assist</a>
-      <a class="tab" href="./index.html">2. Effects</a>
+      <a class="tab active" href="./reframe_assist.html">1. Pre Reframe</a>
+      <a class="tab" href="./reframe.html">2. Reframe</a>
+      <a class="tab" href="./index.html">3. Effects</a>
+      <a class="tab" href="./settings.html">4. Settings</a>
     </nav>
   </header>
-
   <main class="layout assistLayout">
     <section class="panel">
-      <h1>Reframe Assist</h1>
-      <p class="sub">Step 1B: play fast, place manual face boxes as anchors, save Assist JSON, then reuse it in 1. Reframe.</p>
-
-      <div class="row row-single topActionRow">
-        <button id="verifyBtn" class="secondary">Verify FFmpeg</button>
-      </div>
-
+      <h1>Pre Reframe Workspace</h1>
+      <p class="sub">Step 1: preview the source, place manual face anchors, save Assist JSON, then reuse it in 2. Reframe.</p>
       <div class="fieldRow fieldRow3">
         <label for="sourceVideoPath" class="inlineLabel">Source video path</label>
         <input id="sourceVideoPath" placeholder="C:\\videos\\source_16x9.mp4" readonly />
         <button id="openSourceBtn">Select Source Video</button>
       </div>
-
       <div class="fieldRow fieldRow3">
         <label for="targetFacePath" class="inlineLabel">Target face folder path</label>
-        <input id="targetFacePath" placeholder="S:\tools\codex\waka_images" readonly />
+        <input id="targetFacePath" placeholder="Configured in Settings" readonly />
         <button id="pickTargetFaceBtn" class="secondary">Select Target Face Folder</button>
       </div>
-
       <div class="fieldRow fieldRow2">
         <label for="assistTrackingEngine" class="inlineLabel">Assist tracking engine</label>
         <select id="assistTrackingEngine">
@@ -54,16 +47,13 @@
       </div>
       <div class="fieldRow fieldRow2">
         <label for="assistJsonPath" class="inlineLabel">Assist JSON path</label>
-        <input id="assistJsonPath" placeholder="C:\videos\source_assist_yymmddhhmmss.json" />
+        <input id="assistJsonPath" placeholder="Configured assist-json directory or source folder" />
       </div>
-
-
       <div class="sliderRow">
         <div class="sliderLabel">Assist stability</div>
         <div id="stabilityValue" class="sliderValue">0.84</div>
         <input id="stability" type="range" min="0" max="1" step="0.01" value="0.84" />
       </div>
-
       <div class="fieldRow fieldRow2">
         <label for="playbackRate" class="inlineLabel">Playback speed</label>
         <select id="playbackRate">
@@ -75,36 +65,28 @@
           <option value="4">4.0x</option>
         </select>
       </div>
-
       <div class="row">
         <button id="playPauseBtn" class="secondary">Play / Pause</button>
         <button id="clearSelectionBtn" class="secondary">Clear Selection</button>
       </div>
-
       <label class="checkboxRow">
         <input id="showAllAnchors" type="checkbox" />
         <span>Show all saved anchors</span>
       </label>
-
       <div class="assistHelp">
         Pause the video, drag a face rectangle, and the anchor is saved automatically at the current time. Repeat only where tracking would drift.
       </div>
-
       <div class="assistVideoWrap">
         <video id="assistVideo" class="assistVideo" controls playsinline></video>
         <canvas id="assistOverlay" class="assistOverlay"></canvas>
       </div>
-
       <div class="assistMeta" id="assistMeta">No video loaded.</div>
-
       <div class="row">
         <button id="saveJsonBtn" class="secondary">Save Assist JSON</button>
         <button id="loadJsonBtn" class="secondary">Load Assist JSON</button>
       </div>
-
       <button id="sendToReframeBtn" class="secondary">Send Assist JSON To Reframe</button>
     </section>
-
     <section class="panel">
       <h2>Status</h2>
       <div class="progressWrap">
@@ -112,17 +94,14 @@
         <div id="etaInfo" class="eta">Idle</div>
       </div>
       <pre id="statusInfo">Idle.</pre>
-
       <h2>Anchors</h2>
       <div class="assistAnchorTools row">
         <button id="sortAnchorsBtn" class="secondary">Sort Anchors</button>
         <button id="clearAnchorsBtn" class="secondary">Clear Anchors</button>
       </div>
       <div id="anchorList" class="anchorList"></div>
-
       <h2>Assist JSON</h2>
       <pre id="anchorJson">[]</pre>
-
       <div class="assistShortcutCard">
         <div class="assistShortcutTitle">Keyboard shortcuts</div>
         <div class="assistShortcutGrid">
@@ -135,10 +114,6 @@
       </div>
     </section>
   </main>
-
-  <script type="module" src="./reframe_assist.js?v=20260317-1"></script>
+  <script type="module" src="./reframe_assist.js?v=20260319-1"></script>
 </body>
 </html>
-
-
-
