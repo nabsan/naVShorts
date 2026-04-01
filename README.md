@@ -92,6 +92,7 @@ Notes:
   - `Apply Effects`
 - Preview output uses a `_preview` postfix in the file name.
 - Preview output is intentionally lighter and faster than final export.
+- If the input path contains non-ASCII characters, Beat Analysis temporarily uses an ASCII-only temp copy to avoid ffmpeg path-opening failures.
 
 ## Effects Export Presets
 - YouTube Shorts `1080x1920`
@@ -140,4 +141,5 @@ npm.cmd run tauri dev
 - `2. Reframe` now auto-loads target face folder info from Assist JSON when available
 - `1. Pre Reframe` now reuses cached preview proxies, shows the current box by default, and supports keyboard shortcuts
 - `3. Effects` now auto-runs `Analyze Beats -> Apply Effects` before both Preview and Final export
-- Effects Preview now writes a `_preview` file and uses lighter preview render settings for speed
+- Effects Preview now writes a `_preview` file and uses lighter preview render settings for speed`r`n- Beat Analysis now falls back to an ASCII-only temp copy when the source path contains non-ASCII characters
+

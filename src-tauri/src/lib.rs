@@ -539,6 +539,34 @@ fn pick_json_file_with_default(start_dir: Option<String>) -> Result<Option<Strin
 }
 
 
+fn make_ascii_safe_temp_copy_if_needed(input: &Path, prefix: &str) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let needs_ascii_copy = input
+        .to_string_lossy()
+        .chars()
+        .any(|ch| !ch.is_ascii());
+
+    if !needs_ascii_copy {
+        return Ok((input.to_path_buf(), None));
+    }
+
+    let ext = input
+        .extension()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("tmp");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let temp_root = std::env::temp_dir().join("naVShorts_ascii_input");
+    fs::create_dir_all(&temp_root)
+        .map_err(|e| format!("failed to create temp input directory: {e}"))?;
+    let temp_path = temp_root.join(format!("{prefix}_{stamp}.{ext}"));
+    fs::copy(input, &temp_path)
+        .map_err(|e| format!("failed to create ASCII-safe temp copy: {e}"))?;
+
+    Ok((temp_path.clone(), Some(temp_path)))
+}
 fn load_manual_assist_project(path: &Path) -> Result<ManualAssistProject, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("failed to read assist json: {e}"))?;
     serde_json::from_str::<ManualAssistProject>(&text).map_err(|e| format!("invalid assist json: {e}"))
@@ -643,7 +671,13 @@ fn read_preview_video_base64(path: String) -> Result<serde_json::Value, String> 
 fn analyze_beats(path: String, sensitivity: f64, state: State<AppState>) -> Result<BeatMap, String> {
     let sensitivity = sensitivity.clamp(0.0, 1.0);
     let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
-    let raw = analyze_beats_from_video(&ffmpeg, Path::new(&path), sensitivity).map_err(|e| format!("{e:#}"))?;
+    let input_path = PathBuf::from(path.trim());
+    let (analysis_input, cleanup_path) = make_ascii_safe_temp_copy_if_needed(&input_path, "beats_input")?;
+    let raw_result = analyze_beats_from_video(&ffmpeg, &analysis_input, sensitivity).map_err(|e| format!("{e:#}"));
+    if let Some(temp_path) = cleanup_path {
+        let _ = fs::remove_file(temp_path);
+    }
+    let raw = raw_result?;
     let normalized = normalize_beat_map(&raw);
 
     let beat_map = BeatMap { points: normalized };
@@ -1993,6 +2027,9 @@ mod tests {
         assert!(s.contains("zoomSineSmooth"));
     }
 }
+
+
+
 
 
 
