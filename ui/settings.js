@@ -13,6 +13,8 @@ const $ = (id) => document.getElementById(id);
 const RESET_NOTICE_KEY = "naVShorts.resetNotice.v1";
 const REMEMBERED_UI_KEYS = [
   "naVShorts.effects.v1",
+  "naVShorts.motion.v1",
+  "naVShorts.cineMotion.v1",
   "naVShorts.reframe.v2",
   "naVShorts.reframeAssist.v5",
 ];
@@ -84,7 +86,7 @@ async function saveConfig() {
 async function resetRememberedUiState() {
   try {
     const confirmed = window.confirm(
-      "Reset all remembered UI state for Pre Reframe, Reframe, and Effects?\n\nA backup file will be written first."
+      "Reset all remembered UI state for Pre Reframe, Reframe, and Motion?\n\nA backup file will be written first."
     );
     if (!confirmed) {
       printStatus("Reset cancelled.");

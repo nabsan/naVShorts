@@ -13,8 +13,8 @@ use core::{
     dynamic_loop_zoom_envelope, normalize_beat_map, BeatPoint,
 };
 use media::{
-    build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points, estimate_manual_assist_track_points, estimate_person_bytetrack_arcface_points, estimate_person_track_points, finalize_reframe_track_points, ReframeTrackPoint,
-    create_preview_proxy, inspect_preview_proxy, ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, score_face_folder_with_onnx_python, tool_version_line, verify_onnx_assets,
+    build_cine_motion_filtergraph, build_filtergraph, build_reframe_filtergraph, detect_hardware_encoders, estimate_face_track_points, estimate_manual_assist_track_points, estimate_person_bytetrack_arcface_points, estimate_person_track_points, finalize_reframe_track_points, ReframeTrackPoint,
+    create_preview_proxy, create_preview_proxy_with_audio, inspect_preview_proxy, ffmpeg_binary, ffprobe_binary, probe_video, render_with_ffmpeg, score_face_folder_with_onnx_python, tool_version_line, verify_onnx_assets,
 };
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -206,6 +206,107 @@ pub struct ManualAssistProject {
     #[serde(default)]
     pub assist_tracking_engine: Option<String>,
     pub anchors: Vec<ManualAssistAnchor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CineMotionEventType {
+    Zoom,
+    Pan,
+    CursorFocus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MotionEasing {
+    EaseOutCubic,
+    EaseOutQuart,
+}
+
+fn default_cine_strength() -> f64 {
+    1.05
+}
+
+fn default_cine_attack_sec() -> f64 {
+    0.15
+}
+
+fn default_cine_release_sec() -> f64 {
+    1.0
+}
+
+fn default_motion_easing() -> MotionEasing {
+    MotionEasing::EaseOutCubic
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CineMotionEvent {
+    pub time_sec: f64,
+    #[serde(rename = "type", alias = "eventType")]
+    pub event_type: CineMotionEventType,
+    #[serde(default = "default_cine_strength")]
+    pub strength: f64,
+    #[serde(default = "default_cine_attack_sec")]
+    pub attack_sec: f64,
+    #[serde(default = "default_cine_release_sec")]
+    pub release_sec: f64,
+    #[serde(default = "default_motion_easing")]
+    pub easing: MotionEasing,
+    #[serde(default)]
+    pub offset_x: f64,
+    #[serde(default)]
+    pub offset_y: f64,
+    #[serde(default)]
+    pub focus_x_ratio: Option<f64>,
+    #[serde(default)]
+    pub focus_y_ratio: Option<f64>,
+}
+
+impl CineMotionEvent {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.time_sec.is_finite() || self.time_sec < 0.0 {
+            return Err("cine motion event time_sec must be >= 0".to_string());
+        }
+        if !self.strength.is_finite() || !(1.0..=1.10).contains(&self.strength) {
+            return Err("cine motion event strength must be between 1.00 and 1.10".to_string());
+        }
+        if !self.attack_sec.is_finite() || !(0.03..=1.0).contains(&self.attack_sec) {
+            return Err("cine motion event attack_sec must be between 0.03 and 1.0".to_string());
+        }
+        if !self.release_sec.is_finite() || !(0.10..=4.0).contains(&self.release_sec) {
+            return Err("cine motion event release_sec must be between 0.10 and 4.0".to_string());
+        }
+        if !self.offset_x.is_finite() || self.offset_x.abs() > 0.10 {
+            return Err("cine motion event offset_x must be between -0.10 and 0.10".to_string());
+        }
+        if !self.offset_y.is_finite() || self.offset_y.abs() > 0.10 {
+            return Err("cine motion event offset_y must be between -0.10 and 0.10".to_string());
+        }
+        if let Some(v) = self.focus_x_ratio {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return Err("cine motion event focus_x_ratio must be between 0.0 and 1.0".to_string());
+            }
+        }
+        if let Some(v) = self.focus_y_ratio {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return Err("cine motion event focus_y_ratio must be between 0.0 and 1.0".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CineMotionRenderRequest {
+    pub input_path: String,
+    pub output_path: String,
+    pub preset: ExportPreset,
+    pub preview: bool,
+    pub encoder: Option<VideoEncoder>,
+    #[serde(default)]
+    pub events: Vec<CineMotionEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -642,6 +743,27 @@ fn create_preview_video(path: String) -> Result<String, String> {
     Ok(preview.display().to_string())
 }
 
+#[tauri::command]
+fn create_preview_video_with_audio(path: String) -> Result<String, String> {
+    let input = PathBuf::from(path.trim());
+    if !input.exists() {
+        return Err(format!("Input file does not exist: {}", path));
+    }
+    let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
+    let preview_dir = load_app_config_internal()
+        .ok()
+        .map(|(cfg, _, _)| cfg.preview_proxy_dir)
+        .unwrap_or_default();
+    let preview_root = if preview_dir.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(preview_dir.trim()))
+    };
+    let preview = create_preview_proxy_with_audio(&ffmpeg, &input, preview_root.as_deref(), true)
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(preview.display().to_string())
+}
+
 
 #[tauri::command]
 fn inspect_preview_video(path: String) -> Result<serde_json::Value, String> {
@@ -813,7 +935,8 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
             }
         }
 
-        let render_result = render_with_ffmpeg(
+        let mut effective_encoder = chosen_encoder.clone();
+        let mut render_result = render_with_ffmpeg(
             &ffmpeg,
             Path::new(&input_video),
             Path::new(&output_path),
@@ -823,7 +946,7 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
             !request.preview,
             frame_rate,
             info.duration_sec,
-            chosen_encoder.clone(),
+            effective_encoder.clone(),
             |progress: f64, message: String| {
                 if let Ok(mut s) = status.lock() {
                     s.progress = progress.clamp(0.0, 1.0);
@@ -831,6 +954,34 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
                 }
             },
         );
+
+        if matches!(requested_encoder, VideoEncoder::Auto)
+            && matches!(effective_encoder, VideoEncoder::Nvidia)
+            && render_result.as_ref().err().map(|e| is_nvenc_runtime_driver_error(&format!("{e:#}"))).unwrap_or(false)
+        {
+            if let Ok(mut s) = status.lock() {
+                s.message = "NVENC driver mismatch detected. Retrying with CPU (libx264)...".to_string();
+            }
+            effective_encoder = VideoEncoder::Cpu;
+            render_result = render_with_ffmpeg(
+                &ffmpeg,
+                Path::new(&input_video),
+                Path::new(&output_path),
+                &filtergraph,
+                out_width,
+                out_height,
+                !request.preview,
+                frame_rate,
+                info.duration_sec,
+                effective_encoder.clone(),
+                |progress: f64, message: String| {
+                    if let Ok(mut s) = status.lock() {
+                        s.progress = progress.clamp(0.0, 1.0);
+                        s.message = format!("CPU fallback: {message}");
+                    }
+                },
+            );
+        }
 
         let elapsed_sec = started_timer.elapsed().as_secs_f64();
         let finished_at = SystemTime::now();
@@ -877,6 +1028,173 @@ fn render(request: RenderRequest, state: State<AppState>) -> Result<String, Stri
                 frame_rate,
                 effects: effects_for_log,
                 beat_points,
+                filter_len: filtergraph.len(),
+                render_report: render_result.ok(),
+            },
+        );
+    });
+
+    Ok(job_id)
+}
+
+#[tauri::command]
+fn render_cine_motion(request: CineMotionRenderRequest, state: State<AppState>) -> Result<String, String> {
+    let input_video = request.input_path.trim().to_string();
+    let output_path = request.output_path.trim().to_string();
+    if input_video.is_empty() {
+        return Err("Input path is empty".to_string());
+    }
+    if output_path.is_empty() {
+        return Err("Output path is empty".to_string());
+    }
+    if input_video.eq_ignore_ascii_case(&output_path) {
+        return Err("Output path must be different from input video path".to_string());
+    }
+    if request.events.is_empty() {
+        return Err("Add at least one Cine Motion event before rendering.".to_string());
+    }
+    for event in &request.events {
+        event.validate()?;
+    }
+
+    let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
+    let ffprobe = ffprobe_binary().map_err(|e| format!("{e:#}"))?;
+    let info = probe_video(&ffprobe, Path::new(&input_video)).map_err(|e| format!("{e:#}"))?;
+    let ffmpeg_ver = tool_version_line(&ffmpeg).unwrap_or_else(|_| "unknown".to_string());
+    let available_hw = detect_hardware_encoders(&ffmpeg).map_err(|e| format!("{e:#}"))?;
+    let requested_encoder = request.encoder.clone().unwrap_or(VideoEncoder::Auto);
+    let chosen_encoder = resolve_encoder(requested_encoder.clone(), &available_hw)?;
+    let frame_rate = if request.preview { 18 } else { preset_frame_rate(&request.preset) };
+    let (out_width, out_height) = if request.preview {
+        (540, 960)
+    } else {
+        preset_dimensions(&request.preset)
+    };
+    let filtergraph = build_cine_motion_filtergraph(&request.events, out_width, out_height);
+
+    let job_id = Uuid::new_v4().to_string();
+    let status = Arc::new(Mutex::new(RenderStatus {
+        job_id: job_id.clone(),
+        state: RenderState::Queued,
+        progress: 0.0,
+        message: "Queued".to_string(),
+        output_path: None,
+    }));
+
+    {
+        let mut renders = state.renders.lock().map_err(|_| "State lock poisoned")?;
+        renders.insert(job_id.clone(), status.clone());
+    }
+
+    std::thread::spawn(move || {
+        let started_at = SystemTime::now();
+        let started_timer = Instant::now();
+
+        if let Ok(mut s) = status.lock() {
+            s.state = RenderState::Running;
+            s.progress = 0.08;
+            s.message = format!("Preparing Cine Motion render (events={})...", request.events.len());
+        }
+
+        let mut effective_encoder = chosen_encoder.clone();
+        let mut render_result = render_with_ffmpeg(
+            &ffmpeg,
+            Path::new(&input_video),
+            Path::new(&output_path),
+            &filtergraph,
+            out_width,
+            out_height,
+            !request.preview,
+            frame_rate,
+            info.duration_sec,
+            effective_encoder.clone(),
+            |progress: f64, message: String| {
+                if let Ok(mut s) = status.lock() {
+                    s.progress = (0.12 + progress.clamp(0.0, 1.0) * 0.88).clamp(0.0, 1.0);
+                    s.message = message;
+                }
+            },
+        );
+
+        if matches!(requested_encoder, VideoEncoder::Auto)
+            && matches!(effective_encoder, VideoEncoder::Nvidia)
+            && render_result.as_ref().err().map(|e| is_nvenc_runtime_driver_error(&format!("{e:#}"))).unwrap_or(false)
+        {
+            if let Ok(mut s) = status.lock() {
+                s.message = "NVENC driver mismatch detected. Retrying Cine Motion render with CPU (libx264)...".to_string();
+            }
+            effective_encoder = VideoEncoder::Cpu;
+            render_result = render_with_ffmpeg(
+                &ffmpeg,
+                Path::new(&input_video),
+                Path::new(&output_path),
+                &filtergraph,
+                out_width,
+                out_height,
+                !request.preview,
+                frame_rate,
+                info.duration_sec,
+                effective_encoder.clone(),
+                |progress: f64, message: String| {
+                    if let Ok(mut s) = status.lock() {
+                        s.progress = (0.12 + progress.clamp(0.0, 1.0) * 0.88).clamp(0.0, 1.0);
+                        s.message = format!("CPU fallback: {message}");
+                    }
+                },
+            );
+        }
+
+        let elapsed_sec = started_timer.elapsed().as_secs_f64();
+        let finished_at = SystemTime::now();
+
+        let mut final_message = String::new();
+        let mut final_ok = false;
+
+        if let Ok(mut s) = status.lock() {
+            match &render_result {
+                Ok(_) => {
+                    s.state = RenderState::Completed;
+                    s.progress = 1.0;
+                    s.message = format!("Cine Motion render completed (events={})", request.events.len());
+                    s.output_path = Some(output_path.clone());
+                    final_message = s.message.clone();
+                    final_ok = true;
+                }
+                Err(err) => {
+                    s.state = RenderState::Failed;
+                    s.message = format!("Render failed: {err:#}");
+                    final_message = s.message.clone();
+                }
+            }
+        }
+
+        let _ = write_export_log(
+            &output_path,
+            LogSnapshot {
+                success: final_ok,
+                status_message: final_message,
+                started_at,
+                finished_at,
+                elapsed_sec,
+                input_video: input_video.clone(),
+                output_video: output_path.clone(),
+                ffmpeg_path: ffmpeg.display().to_string(),
+                ffmpeg_version: ffmpeg_ver.clone(),
+                requested_encoder,
+                chosen_encoder: effective_encoder,
+                available_hw,
+                preset: request.preset.clone(),
+                width: out_width,
+                height: out_height,
+                frame_rate,
+                effects: EffectsConfig {
+                    zoom_mode: ZoomMode::None,
+                    zoom_strength: 0.0,
+                    bounce_strength: 0.0,
+                    beat_sensitivity: 0.0,
+                    motion_blur_strength: 0.0,
+                },
+                beat_points: request.events.len(),
                 filter_len: filtergraph.len(),
                 render_report: render_result.ok(),
             },
@@ -1831,6 +2149,13 @@ fn resolve_encoder(requested: VideoEncoder, available_hw: &[String]) -> Result<V
     Ok(chosen)
 }
 
+fn is_nvenc_runtime_driver_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("driver does not support the required nvenc api version")
+        || lower.contains("minimum required nvidia driver for nvenc")
+        || lower.contains("required nvenc api version")
+}
+
 #[derive(Clone)]
 struct LogSnapshot {
     success: bool,
@@ -1946,12 +2271,14 @@ pub fn run() {
             backup_ui_state_snapshot,
             open_video,
             create_preview_video,
+            create_preview_video_with_audio,
             inspect_preview_video,
             read_preview_video_base64,
             analyze_beats,
             set_effects,
             get_project,
             render,
+            render_cine_motion,
             render_reframe,
             render_reframe_assist,
             save_manual_assist_json,

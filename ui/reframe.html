@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>naVShorts - Reframe</title>
   <link rel="stylesheet" href="./styles.css" />
+  <script>
+    if (new URLSearchParams(window.location.search).get("embedded") === "1") {
+      document.documentElement.classList.add("embeddedMode");
+    }
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -18,7 +23,7 @@
     <nav class="tabs" aria-label="Workspace tabs">
       <a class="tab" href="./reframe_assist.html">1. Pre Reframe</a>
       <a class="tab active" href="./reframe.html">2. Reframe</a>
-      <a class="tab" href="./index.html">3. Effects</a>
+      <a class="tab" href="./index.html">3. Motion</a>
       <a class="tab" href="./settings.html">4. Settings</a>
     </nav>
   </header>
@@ -26,17 +31,17 @@
     <section class="panel">
       <h1>Reframe Workspace</h1>
       <p class="sub">Step 2: Convert the source into vertical 9:16 output with tracking and export settings.</p>
-      <div class="fieldRow fieldRow3">
+      <div class="fieldRow fieldRow3 pathPickerRow">
         <label for="sourceVideoPath" class="inlineLabel">Source video path</label>
         <input id="sourceVideoPath" placeholder="C:\\videos\\source_16x9.mp4" readonly />
         <button id="openSourceBtn">Select Source Video</button>
       </div>
-      <div class="fieldRow fieldRow3">
+      <div class="fieldRow fieldRow3 pathPickerRow">
         <label for="targetFacePath" class="inlineLabel">Target face folder path</label>
         <input id="targetFacePath" placeholder="Configured in Settings" readonly />
         <button id="pickTargetFaceBtn" class="secondary">Select Target Face Folder</button>
       </div>
-      <div class="fieldRow fieldRow3">
+      <div class="fieldRow fieldRow3 pathPickerRow">
         <label for="assistJsonPath" class="inlineLabel">Assist JSON path</label>
         <input id="assistJsonPath" placeholder="Select Assist JSON from Pre Reframe" readonly />
         <button id="pickAssistJsonBtn" class="secondary">Select Assist JSON</button>
@@ -87,7 +92,7 @@
         <button id="previewBtn" class="secondary">Render Reframe Preview</button>
         <button id="exportBtn">Export Reframed Video</button>
       </div>
-      <button id="sendToEffectsBtn" class="secondary">Send Reframed Video To Effects</button>
+      <button id="sendToEffectsBtn" class="secondary">Send Reframed Video To Motion</button>
     </section>
     <section class="panel">
       <h2>Status</h2>

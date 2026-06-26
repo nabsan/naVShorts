@@ -3,8 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>naVShorts - Effects</title>
+  <title>naVShorts - Motion</title>
   <link rel="stylesheet" href="./styles.css" />
+  <script>
+    if (new URLSearchParams(window.location.search).get("embedded") === "1") {
+      document.documentElement.classList.add("embeddedMode");
+    }
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -18,82 +23,161 @@
     <nav class="tabs" aria-label="Workspace tabs">
       <a class="tab" href="./reframe_assist.html">1. Pre Reframe</a>
       <a class="tab" href="./reframe.html">2. Reframe</a>
-      <a class="tab active" href="./index.html">3. Effects</a>
+      <a class="tab active" href="./index.html">3. Motion</a>
       <a class="tab" href="./settings.html">4. Settings</a>
     </nav>
   </header>
   <main class="layout">
     <section class="panel">
-      <h1>Effects Workspace</h1>
-      <p class="sub">Step 3: Add zoom / beat effects and export the final vertical social video.</p>
-      <div class="fieldRow fieldRow3">
-        <label for="videoPath" class="inlineLabel">Video file path</label>
-        <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
-        <button id="openBtn">Select & Open Video</button>
+      <h1>Motion Workspace</h1>
+      <p class="sub">Step 3: Choose one motion style for the reframed vertical video. Use Quick Effects for the current fast workflow, or switch to Cine Motion when that workspace is ready.</p>
+
+      <div class="motionModeBar" role="tablist" aria-label="Motion style">
+        <button id="cineMotionTab" type="button" class="motionModeBtn" data-motion-mode="cineMotion" aria-selected="false">Cine Motion</button>
+        <button id="quickEffectsTab" type="button" class="motionModeBtn" data-motion-mode="quickEffects" aria-selected="true">Quick Effects</button>
       </div>
-      <h2>Effects</h2>
-      <div class="fieldRow fieldRow2">
-        <label for="zoomMode" class="inlineLabel">Zoom mode</label>
-        <select id="zoomMode">
-          <option value="none">None</option>
-          <option value="zoomIn" selected>Zoom In</option>
-          <option value="zoomOut">Zoom Out</option>
-          <option value="zoomInOutBeat">Zoom In & Out (Beat Sync)</option>
-          <option value="zoomInOutLoop">Zoom In & Out (Loop)</option>
-          <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
-        </select>
-      </div>
-      <div class="sliderRow">
-        <div class="sliderLabel">Zoom strength</div>
-        <div id="zoomStrengthValue" class="sliderValue">0.18</div>
-        <input id="zoomStrength" type="range" min="0" max="1" step="0.01" value="0.18" />
-      </div>
-      <div class="sliderRow">
-        <div class="sliderLabel">Bounce strength</div>
-        <div id="bounceStrengthValue" class="sliderValue">0.16</div>
-        <input id="bounceStrength" type="range" min="0" max="1" step="0.01" value="0.16" />
-      </div>
-      <div class="sliderRow">
-        <div class="sliderLabel">Beat sensitivity</div>
-        <div id="beatSensitivityValue" class="sliderValue">0.55</div>
-        <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
-      </div>
-      <div class="sliderRow">
-        <div class="sliderLabel">Motion blur strength</div>
-        <div id="motionBlurStrengthValue" class="sliderValue">0.00</div>
-        <input id="motionBlurStrength" type="range" min="0" max="1" step="0.01" value="0.00" />
-      </div>
-      <div class="row">
-        <button id="analyzeBtn" class="secondary">Analyze Beats</button>
-        <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
-      </div>
-      <h2>Render</h2>
-      <div class="fieldRow fieldRow2">
-        <label for="preset" class="inlineLabel">Preset</label>
-        <select id="preset">
-          <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
-          <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
-          <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
-        </select>
-      </div>
-      <div class="fieldRow fieldRow2">
-        <label for="outputPath" class="inlineLabel">Output path</label>
-        <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
-      </div>
-      <div class="fieldRow fieldRow2">
-        <label for="encoder" class="inlineLabel">Video encoder</label>
-        <select id="encoder">
-          <option value="auto" selected>Auto (recommended)</option>
-          <option value="cpu">CPU (libx264)</option>
-          <option value="nvidia">NVIDIA (NVENC)</option>
-          <option value="intel">Intel (QSV)</option>
-          <option value="amd">AMD (AMF)</option>
-        </select>
-      </div>
-      <div class="row">
-        <button id="previewBtn" class="secondary">Render Preview</button>
-        <button id="exportBtn">Export Final</button>
-      </div>
+
+      <section id="cineMotionPanel" class="motionPanel" hidden>
+        <div class="motionComingSoon">
+          <h2>Cine Motion</h2>
+          <p>Semi-manual camera direction for natural zoom and pan accents. This mode is separate from Quick Effects so motion does not stack too aggressively.</p>
+          <div class="fieldRow fieldRow3 pathPickerRow">
+            <label for="cineVideoPath" class="inlineLabel">Video file path</label>
+            <input id="cineVideoPath" placeholder="C:\\videos\\clip.mp4" readonly />
+            <button id="cineOpenBtn">Select & Open Video</button>
+          </div>
+          <div class="fieldRow fieldRow2">
+            <label for="cinePlaybackRate" class="inlineLabel">Playback speed</label>
+            <select id="cinePlaybackRate">
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1.0x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2.0x</option>
+            </select>
+          </div>
+          <div class="row">
+            <button id="cinePlayPauseBtn" class="secondary">Play / Pause</button>
+            <button id="cineUndoBtn" class="secondary">Undo Last Event</button>
+          </div>
+          <div class="assistHelp">
+            While this mode is active, use keyboard shortcuts on the preview to record camera events. Start with small moves only.
+          </div>
+          <div class="assistVideoWrap motionVideoWrap">
+            <video id="cineVideo" class="assistVideo" controls playsinline></video>
+          </div>
+          <div id="cineMeta" class="assistMeta">No video loaded.</div>
+          <div class="motionShortcutCard">
+            <div class="assistShortcutTitle">Cine Motion shortcuts</div>
+            <div class="assistShortcutGrid">
+              <div><kbd>Space</kbd><span>Play / Pause</span></div>
+              <div><kbd>← / →</kbd><span>Back / Forward 5 sec</span></div>
+              <div><kbd>Z</kbd><span>Soft zoom</span></div>
+              <div><kbd>X</kbd><span>Strong zoom</span></div>
+              <div><kbd>C</kbd><span>Cursor focus</span></div>
+              <div><kbd>V / B</kbd><span>Pan left / right</span></div>
+              <div><kbd>N / M</kbd><span>Pan up / down</span></div>
+              <div><kbd>Ctrl + Z</kbd><span>Undo last event</span></div>
+            </div>
+          </div>
+          <div class="fieldRow fieldRow2">
+            <label for="cinePreset" class="inlineLabel">Preset</label>
+            <select id="cinePreset">
+              <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
+              <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
+              <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
+            </select>
+          </div>
+          <div class="fieldRow fieldRow2">
+            <label for="cineOutputPath" class="inlineLabel">Output path</label>
+            <input id="cineOutputPath" placeholder="C:\\videos\\clip_cinemotion_yymmddhhmmss.mp4" />
+          </div>
+          <div class="fieldRow fieldRow2">
+            <label for="cineEncoder" class="inlineLabel">Video encoder</label>
+            <select id="cineEncoder">
+              <option value="auto" selected>Auto (recommended)</option>
+              <option value="cpu">CPU (libx264)</option>
+              <option value="nvidia">NVIDIA (NVENC)</option>
+              <option value="intel">Intel (QSV)</option>
+              <option value="amd">AMD (AMF)</option>
+            </select>
+          </div>
+          <div class="row">
+            <button id="cinePreviewBtn" class="secondary">Render Cine Preview</button>
+            <button id="cineExportBtn">Export Cine Motion</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickEffectsPanel" class="motionPanel">
+        <div class="fieldRow fieldRow3 pathPickerRow">
+          <label for="videoPath" class="inlineLabel">Video file path</label>
+          <input id="videoPath" placeholder="C:\\videos\\clip.mp4" readonly />
+          <button id="openBtn">Select & Open Video</button>
+        </div>
+        <h2>Quick Effects</h2>
+        <div class="fieldRow fieldRow2">
+          <label for="zoomMode" class="inlineLabel">Zoom mode</label>
+          <select id="zoomMode">
+            <option value="none">None</option>
+            <option value="zoomIn" selected>Zoom In</option>
+            <option value="zoomOut">Zoom Out</option>
+            <option value="zoomInOutBeat">Zoom In & Out (Beat Sync)</option>
+            <option value="zoomInOutLoop">Zoom In & Out (Loop)</option>
+            <option value="zoomSineSmooth">Zoom Sine Smooth (tmix optional)</option>
+          </select>
+        </div>
+        <div class="sliderRow">
+          <div class="sliderLabel">Zoom strength</div>
+          <div id="zoomStrengthValue" class="sliderValue">0.18</div>
+          <input id="zoomStrength" type="range" min="0" max="1" step="0.01" value="0.18" />
+        </div>
+        <div class="sliderRow">
+          <div class="sliderLabel">Bounce strength</div>
+          <div id="bounceStrengthValue" class="sliderValue">0.16</div>
+          <input id="bounceStrength" type="range" min="0" max="1" step="0.01" value="0.16" />
+        </div>
+        <div class="sliderRow">
+          <div class="sliderLabel">Beat sensitivity</div>
+          <div id="beatSensitivityValue" class="sliderValue">0.55</div>
+          <input id="beatSensitivity" type="range" min="0" max="1" step="0.01" value="0.55" />
+        </div>
+        <div class="sliderRow">
+          <div class="sliderLabel">Motion blur strength</div>
+          <div id="motionBlurStrengthValue" class="sliderValue">0.00</div>
+          <input id="motionBlurStrength" type="range" min="0" max="1" step="0.01" value="0.00" />
+        </div>
+        <div class="row">
+          <button id="analyzeBtn" class="secondary">Analyze Beats</button>
+          <button id="saveEffectsBtn" class="secondary">Apply Effects</button>
+        </div>
+        <h2>Render</h2>
+        <div class="fieldRow fieldRow2">
+          <label for="preset" class="inlineLabel">Preset</label>
+          <select id="preset">
+            <option value="shorts1080x1920" selected>YouTube Shorts (1080x1920)</option>
+            <option value="reels1080x1920">Instagram Reels (1080x1920)</option>
+            <option value="vertical4k2160x3840">Vertical 4K (2160x3840)</option>
+          </select>
+        </div>
+        <div class="fieldRow fieldRow2">
+          <label for="outputPath" class="inlineLabel">Output path</label>
+          <input id="outputPath" placeholder="C:\\videos\\hoge_exported_yymmddhhmmss.mp4" />
+        </div>
+        <div class="fieldRow fieldRow2">
+          <label for="encoder" class="inlineLabel">Video encoder</label>
+          <select id="encoder">
+            <option value="auto" selected>Auto (recommended)</option>
+            <option value="cpu">CPU (libx264)</option>
+            <option value="nvidia">NVIDIA (NVENC)</option>
+            <option value="intel">Intel (QSV)</option>
+            <option value="amd">AMD (AMF)</option>
+          </select>
+        </div>
+        <div class="row">
+          <button id="previewBtn" class="secondary">Render Preview</button>
+          <button id="exportBtn">Export Final</button>
+        </div>
+      </section>
     </section>
     <section class="panel">
       <h2>Status</h2>
@@ -102,11 +186,23 @@
         <div id="etaInfo" class="eta">Idle</div>
       </div>
       <pre id="statusInfo">Idle.</pre>
-      <h2>Project</h2>
-      <pre id="projectInfo">No video loaded.</pre>
+      <section id="cineEventSection" class="motionPanel" hidden>
+        <h2>Cine Events</h2>
+        <div class="assistAnchorTools row">
+          <button id="cineSortEventsBtn" class="secondary">Sort Events</button>
+          <button id="cineClearEventsBtn" class="secondary">Clear Events</button>
+        </div>
+        <div id="cineEventList" class="anchorList"></div>
+        <h2>Cine Motion JSON</h2>
+        <pre id="cineJsonInfo">[]</pre>
+      </section>
+      <section id="quickProjectSection" class="motionPanel">
+        <h2>Project</h2>
+        <pre id="projectInfo">No video loaded.</pre>
+      </section>
     </section>
   </main>
-  <script type="module" src="./app.js?v=20260319-1"></script>
+  <script type="module" src="./app.js?v=20260520-1"></script>
 </body>
 </html>
 

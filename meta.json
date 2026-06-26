@@ -1,0 +1,7 @@
+{
+  "name": "naVShorts",
+  "description": "Tauri-based shorts and reels maker with local video reframing and tracking workflows.",
+  "entry": "run_navshorts.bat",
+  "args": [],
+  "allow_run": true
+}

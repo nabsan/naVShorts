@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #101828;
+  background: #f2f2f7;
+  font-family: Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100vh;
+}
+
+iframe {
+  border: 0;
+}
+
+@layer components {
+  .app-input {
+    @apply h-12 w-full rounded-2xl border border-line bg-white px-4 text-sm text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none transition placeholder:text-[#98a2b3] focus:border-[#9ec5ff] focus:ring-4 focus:ring-[#0071e3]/10;
+  }
+
+  .app-input-readonly {
+    @apply bg-[#f8fafc] text-[#344054];
+  }
+
+  .app-select {
+    @apply h-12 w-full rounded-2xl border border-line bg-white px-4 text-sm text-ink outline-none transition focus:border-[#9ec5ff] focus:ring-4 focus:ring-[#0071e3]/10;
+  }
+
+  .app-btn {
+    @apply inline-flex h-12 items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition;
+  }
+
+  .app-btn-primary {
+    @apply bg-accent text-white shadow-[0_14px_26px_rgba(0,113,227,0.18)] hover:brightness-[1.02];
+  }
+
+  .app-btn-secondary {
+    @apply border border-line bg-white text-ink shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:bg-[#f8fafc];
+  }
+
+  .app-btn-ghost {
+    @apply bg-[#f7f9fc] text-ink shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:bg-white;
+  }
+}

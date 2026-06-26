@@ -22,6 +22,58 @@ body {
   color: var(--ink);
 }
 
+html.embeddedMode {
+  --bg: #f7f8fa;
+  --panel: rgba(255, 255, 255, 0.94);
+  --ink: #101828;
+  --accent: #0071e3;
+  --accent-2: #43526d;
+  --border: rgba(15, 23, 42, 0.08);
+  --tab-bg: #c7d2e2;
+  --tab-bg-2: #b6c3d8;
+  --tab-active: #0071e3;
+  --tab-active-2: #005ec4;
+}
+
+html.embeddedMode body {
+  background: transparent;
+}
+
+html.embeddedMode .topbar {
+  display: none;
+}
+
+html.embeddedMode h1 {
+  font-size: 2rem;
+  line-height: 1.05;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+html.embeddedMode h2 {
+  margin-top: 0;
+  margin-bottom: 0;
+  font-size: 1.45rem;
+  line-height: 1.15;
+  font-weight: 640;
+  letter-spacing: 0;
+}
+
+html.embeddedMode .sub,
+html.embeddedMode .assistHelp,
+html.embeddedMode .assistMeta,
+html.embeddedMode .eta,
+html.embeddedMode .motionEventOffset {
+  color: #667085;
+}
+
+html.embeddedMode label,
+html.embeddedMode .sliderLabel {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #344054;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -89,12 +141,144 @@ body {
   padding: 8px 18px 18px;
 }
 
+html.embeddedMode .layout {
+  gap: 16px;
+  padding: 0;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px;
   box-shadow: 0 4px 14px rgba(15, 26, 41, 0.08);
+}
+
+html.embeddedMode .panel {
+  border-radius: 24px;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.06);
+  padding: 24px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0.88) 100%);
+  backdrop-filter: blur(14px);
+}
+
+html.embeddedMode input,
+html.embeddedMode select,
+html.embeddedMode button {
+  min-height: 44px;
+  margin-top: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.92);
+  color: #101828;
+  font-size: 14px;
+  padding: 10px 14px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+}
+
+html.embeddedMode input[readonly] {
+  color: #475467;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+html.embeddedMode input:focus,
+html.embeddedMode select:focus {
+  outline: none;
+  border-color: rgba(0, 113, 227, 0.34);
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.12);
+}
+
+html.embeddedMode button {
+  background: linear-gradient(180deg, #0a84ff 0%, #0071e3 100%);
+  color: #fff;
+  font-weight: 620;
+  letter-spacing: 0;
+  box-shadow: 0 14px 26px rgba(0, 113, 227, 0.18);
+}
+
+html.embeddedMode button.secondary {
+  background: rgba(246, 248, 251, 0.96);
+  color: #111827;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+html.embeddedMode button:hover {
+  filter: none;
+  transform: translateY(-1px);
+}
+
+html.embeddedMode .row,
+html.embeddedMode .fieldRow,
+html.embeddedMode .sliderRow {
+  gap: 10px;
+}
+
+html.embeddedMode .assistVideoWrap {
+  margin-top: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+}
+
+html.embeddedMode .assistVideo {
+  background: #0b1220;
+}
+
+html.embeddedMode .anchorItem,
+html.embeddedMode .assistShortcutCard,
+html.embeddedMode .motionComingSoon,
+html.embeddedMode .motionEventItem {
+  border-radius: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.85);
+}
+
+html.embeddedMode pre {
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  padding: 14px 16px;
+  color: #344054;
+}
+
+html.embeddedMode progress {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+html.embeddedMode progress::-webkit-progress-bar {
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+}
+
+html.embeddedMode progress::-webkit-progress-value {
+  background: linear-gradient(90deg, #7dd3fc 0%, #0a84ff 100%);
+  border-radius: 999px;
+}
+
+html.embeddedMode .checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+html.embeddedMode .checkboxRow input {
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  box-shadow: none;
+}
+
+html.embeddedMode .assistShortcutGrid kbd {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255,255,255,0.96);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
 }
 
 h1 {
@@ -173,6 +357,23 @@ button:hover {
   grid-template-columns: 170px 1fr 200px;
 }
 
+.pathPickerRow {
+  grid-template-columns: 140px minmax(0, 1fr) max-content;
+  gap: 10px;
+}
+
+.pathPickerRow input {
+  min-width: 0;
+}
+
+.pathPickerRow button {
+  width: auto;
+  min-width: 158px;
+  padding-inline: 18px;
+  justify-self: end;
+  white-space: nowrap;
+}
+
 .inlineLabel {
   margin-top: 0;
 }
@@ -205,6 +406,102 @@ button:hover {
   margin-top: 0;
   min-height: 24px;
   padding: 0;
+}
+
+.motionModeBar {
+  display: inline-flex;
+  gap: 0;
+  margin-top: 12px;
+  border: 1px solid #5b4668;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(116, 80, 130, 0.08);
+}
+
+.motionModeBtn {
+  min-width: 170px;
+  margin-top: 0;
+  border-radius: 0;
+  background: linear-gradient(180deg, var(--tab-bg) 0%, var(--tab-bg-2) 100%);
+  color: #fff;
+  font-weight: 800;
+}
+
+.motionModeBtn + .motionModeBtn {
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.motionModeBtn.motionModeBtnActive {
+  background: linear-gradient(180deg, var(--tab-active) 0%, var(--tab-active-2) 100%);
+  box-shadow: inset 0 -3px 0 rgba(255, 245, 230, 0.9);
+}
+
+.motionModeBtn.motionModeBtnInactive {
+  opacity: 0.92;
+}
+
+.motionPanel {
+  margin-top: 18px;
+}
+
+.motionComingSoon {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(31, 107, 140, 0.08) 0%, rgba(255, 250, 242, 0.92) 100%);
+}
+
+.motionFeatureList {
+  margin: 12px 0 0 18px;
+  padding: 0;
+}
+
+.motionFeatureList li + li {
+  margin-top: 8px;
+}
+
+.motionVideoWrap {
+  margin-top: 14px;
+}
+
+.motionShortcutCard {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(217, 79, 48, 0.06);
+}
+
+.motionEventItem {
+  align-items: flex-start;
+}
+
+.motionEventInfo {
+  min-width: 170px;
+}
+
+.motionEventSummary {
+  font-weight: 700;
+}
+
+.motionEventOffset {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #42556a;
+}
+
+.motionEventControls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  gap: 6px;
+  flex: 1;
+}
+
+.motionEventControls input,
+.motionEventControls select {
+  margin-top: 0;
+  min-height: 32px;
+  padding: 6px 8px;
 }
 
 .progressWrap {
@@ -244,6 +541,17 @@ pre {
   word-break: break-word;
 }
 
+#cineJsonInfo,
+#anchorJson,
+#projectInfo {
+  min-height: 220px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 @media (max-width: 900px) {
   #statusInfo {
     width: 100%;
@@ -262,13 +570,27 @@ pre {
 
   .fieldRow2,
   .fieldRow3,
+  .pathPickerRow,
   .sliderRow {
     grid-template-columns: 1fr;
     gap: 4px;
   }
 
+  .motionModeBar {
+    width: 100%;
+  }
+
+  .motionModeBtn {
+    min-width: 0;
+    width: 50%;
+  }
+
   .sliderValue {
     text-align: left;
+  }
+
+  .motionEventControls {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

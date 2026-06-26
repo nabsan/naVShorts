@@ -4,14 +4,16 @@
   "version": "0.1.0",
   "identifier": "com.example.shortsreelsmaker",
   "build": {
-    "frontendDist": "../ui"
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
         "label": "main",
         "title": "naVShorts",
-        "url": "reframe_assist.html",
+        "url": "/",
         "width": 1200,
         "height": 860,
         "resizable": true,

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::{ManualAssistAnchor, VideoEncoder, VideoInfo, ZoomMode};
+use crate::{CineMotionEvent, CineMotionEventType, ManualAssistAnchor, MotionEasing, VideoEncoder, VideoInfo, ZoomMode};
 
 #[derive(Debug, Clone)]
 pub struct ReframeTrackPoint {
@@ -672,6 +672,116 @@ pub fn build_filtergraph(
     )
 }
 
+fn cine_event_envelope_expr(event: &CineMotionEvent) -> String {
+    let start = event.time_sec.max(0.0);
+    let attack = event.attack_sec.clamp(0.03, 1.0);
+    let release = event.release_sec.clamp(0.10, 4.0);
+    let attack_end = start + attack;
+    let release_end = attack_end + release;
+
+    let attack_expr = match event.easing {
+        MotionEasing::EaseOutCubic => {
+            format!("(1-pow(1-((t-{start:.5})/{attack:.5}),3))")
+        }
+        MotionEasing::EaseOutQuart => {
+            format!("(1-pow(1-((t-{start:.5})/{attack:.5}),4))")
+        }
+    };
+
+    let release_expr = match event.easing {
+        MotionEasing::EaseOutCubic => {
+            format!("(1-pow(((t-{attack_end:.5})/{release:.5}),3))")
+        }
+        MotionEasing::EaseOutQuart => {
+            format!("(1-pow(((t-{attack_end:.5})/{release:.5}),4))")
+        }
+    };
+
+    format!(
+        "if(lt(t,{start:.5}),0,if(lt(t,{attack_end:.5}),{attack_expr},if(lt(t,{release_end:.5}),{release_expr},0)))",
+        start = start,
+        attack_end = attack_end,
+        release_end = release_end,
+        attack_expr = attack_expr,
+        release_expr = release_expr
+    )
+}
+
+pub fn build_cine_motion_filtergraph(
+    events: &[CineMotionEvent],
+    output_width: u32,
+    output_height: u32,
+) -> String {
+    let mut zoom_terms: Vec<String> = Vec::new();
+    let mut pan_x_terms: Vec<String> = Vec::new();
+    let mut pan_y_terms: Vec<String> = Vec::new();
+
+    for event in events {
+        let env = cine_event_envelope_expr(event);
+        match event.event_type {
+            CineMotionEventType::Zoom => {
+                let amp = (event.strength.clamp(1.0, 1.10) - 1.0).clamp(0.0, 0.10);
+                if amp > 0.0 {
+                    zoom_terms.push(format!("({amp:.5}*({env}))", amp = amp, env = env));
+                }
+            }
+            CineMotionEventType::Pan => {
+                let x = event.offset_x.clamp(-0.10, 0.10);
+                let y = event.offset_y.clamp(-0.10, 0.10);
+                if x.abs() > f64::EPSILON {
+                    pan_x_terms.push(format!("({x:.5}*({env}))", x = x, env = env));
+                }
+                if y.abs() > f64::EPSILON {
+                    pan_y_terms.push(format!("({y:.5}*({env}))", y = y, env = env));
+                }
+            }
+            CineMotionEventType::CursorFocus => {
+                let amp = (event.strength.clamp(1.0, 1.10) - 1.0).clamp(0.0, 0.10);
+                let fx = event.focus_x_ratio.unwrap_or(0.5).clamp(0.0, 1.0);
+                let fy = event.focus_y_ratio.unwrap_or(0.5).clamp(0.0, 1.0);
+                let x = ((fx - 0.5) * 0.20 + event.offset_x).clamp(-0.10, 0.10);
+                let y = ((fy - 0.5) * 0.20 + event.offset_y).clamp(-0.10, 0.10);
+                if amp > 0.0 {
+                    zoom_terms.push(format!("({amp:.5}*({env}))", amp = amp, env = env));
+                }
+                if x.abs() > f64::EPSILON {
+                    pan_x_terms.push(format!("({x:.5}*({env}))", x = x, env = env));
+                }
+                if y.abs() > f64::EPSILON {
+                    pan_y_terms.push(format!("({y:.5}*({env}))", y = y, env = env));
+                }
+            }
+        }
+    }
+
+    let zoom_expr = if zoom_terms.is_empty() {
+        "1.0".to_string()
+    } else {
+        format!("max(1.0,min(1.10,1.0+{}))", zoom_terms.join("+"))
+    };
+
+    let pan_x_expr = if pan_x_terms.is_empty() {
+        "0.0".to_string()
+    } else {
+        format!("max(-0.10,min(0.10,{}))", pan_x_terms.join("+"))
+    };
+
+    let pan_y_expr = if pan_y_terms.is_empty() {
+        "0.0".to_string()
+    } else {
+        format!("max(-0.10,min(0.10,{}))", pan_y_terms.join("+"))
+    };
+
+    let size = format!("{}:{}", output_width, output_height);
+    format!(
+        "scale='if(gt(a,9/16),-2,1080)':'if(gt(a,9/16),1920,-2)',crop=1080:1920,scale='ceil(1080*({zoom})/2)*2':'ceil(1920*({zoom})/2)*2':eval=frame,crop=1080:1920:x='min(max((iw-1080)/2 + ({pan_x})*((iw-1080)/2),0),iw-1080)':y='min(max((ih-1920)/2 + ({pan_y})*((ih-1920)/2),0),ih-1920)',scale={size}:flags=lanczos",
+        zoom = zoom_expr,
+        pan_x = pan_x_expr,
+        pan_y = pan_y_expr,
+        size = size
+    )
+}
+
 pub fn build_reframe_filtergraph(
     output_width: u32,
     output_height: u32,
@@ -1045,6 +1155,15 @@ pub fn estimate_face_track_points(
 }
 
 pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path, output_root: Option<&Path>) -> Result<PathBuf> {
+    create_preview_proxy_with_audio(ffmpeg_path, input_video, output_root, false)
+}
+
+pub fn create_preview_proxy_with_audio(
+    ffmpeg_path: &Path,
+    input_video: &Path,
+    output_root: Option<&Path>,
+    include_audio: bool,
+) -> Result<PathBuf> {
     let metadata = fs::metadata(input_video)
         .with_context(|| format!("failed to stat source video {}", input_video.display()))?;
     let modified_ms = metadata
@@ -1054,10 +1173,11 @@ pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path, output_root:
         .map(|d| d.as_millis())
         .unwrap_or_default();
     let cache_profile = format!(
-        "navshorts-assist-preview-v4|{}|{}|{}|480|12|34",
+        "navshorts-assist-preview-v5|{}|{}|{}|480|12|34|audio={}",
         input_video.display(),
         metadata.len(),
-        modified_ms
+        modified_ms,
+        include_audio
     );
     let mut hasher = DefaultHasher::new();
     cache_profile.hash(&mut hasher);
@@ -1076,8 +1196,8 @@ pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path, output_root:
         }
     }
     let vf = "scale=480:-2:flags=bicubic,setsar=1,format=yuv420p";
-    let out = Command::new(ffmpeg_path)
-        .arg("-y")
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.arg("-y")
         .arg("-v")
         .arg("error")
         .arg("-fflags")
@@ -1092,7 +1212,6 @@ pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path, output_root:
         .arg("-1")
         .arg("-dn")
         .arg("-sn")
-        .arg("-an")
         .arg("-vf")
         .arg(vf)
         .arg("-c:v")
@@ -1106,7 +1225,22 @@ pub fn create_preview_proxy(ffmpeg_path: &Path, input_video: &Path, output_root:
         .arg("-crf")
         .arg("34")
         .arg("-r")
-        .arg("12")
+        .arg("12");
+
+    if include_audio {
+        cmd.arg("-map")
+            .arg("0:a:0?")
+            .arg("-c:a")
+            .arg("aac")
+            .arg("-b:a")
+            .arg("96k")
+            .arg("-ac")
+            .arg("2");
+    } else {
+        cmd.arg("-an");
+    }
+
+    let out = cmd
         .arg("-movflags")
         .arg("+faststart")
         .arg("-f")
@@ -2245,6 +2379,28 @@ mod tests {
         assert!(g.contains("sin(t*2)"));
         assert!(g.contains("tmix=frames=3"));
         assert!(!g.contains("eq=saturation"));
+    }
+
+    #[test]
+    fn cine_motion_filtergraph_uses_dynamic_zoom_and_pan() {
+        let g = build_cine_motion_filtergraph(
+            &[CineMotionEvent {
+                time_sec: 12.53,
+                event_type: CineMotionEventType::Zoom,
+                strength: 1.05,
+                attack_sec: 0.15,
+                release_sec: 1.0,
+                easing: MotionEasing::EaseOutCubic,
+                offset_x: 0.0,
+                offset_y: 0.0,
+                focus_x_ratio: None,
+                focus_y_ratio: None,
+            }],
+            1080,
+            1920,
+        );
+        assert!(g.contains("max(1.0,min(1.10,1.0+"));
+        assert!(g.contains("crop=1080:1920:x="));
     }
 
     #[test]
