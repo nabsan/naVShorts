@@ -707,6 +707,43 @@ fn cine_event_envelope_expr(event: &CineMotionEvent) -> String {
     )
 }
 
+fn cine_interval_envelope_expr(event: &CineMotionEvent) -> String {
+    let start = event.time_sec.max(0.0);
+    let end = event.end_sec.unwrap_or(start).max(start + 0.25);
+    let attack = event.attack_sec.clamp(0.03, 1.0).min((end - start) / 2.0);
+    let release = event.release_sec.clamp(0.10, 4.0).min((end - start) / 2.0);
+    let attack_end = start + attack;
+    let release_start = end - release;
+
+    let attack_expr = match event.easing {
+        MotionEasing::EaseOutCubic => {
+            format!("(1-pow(1-((t-{start:.5})/{attack:.5}),3))")
+        }
+        MotionEasing::EaseOutQuart => {
+            format!("(1-pow(1-((t-{start:.5})/{attack:.5}),4))")
+        }
+    };
+
+    let release_expr = match event.easing {
+        MotionEasing::EaseOutCubic => {
+            format!("(1-pow(((t-{release_start:.5})/{release:.5}),3))")
+        }
+        MotionEasing::EaseOutQuart => {
+            format!("(1-pow(((t-{release_start:.5})/{release:.5}),4))")
+        }
+    };
+
+    format!(
+        "if(lt(t,{start:.5}),0,if(lt(t,{attack_end:.5}),{attack_expr},if(lt(t,{release_start:.5}),1,if(lt(t,{end:.5}),{release_expr},0))))",
+        start = start,
+        attack_end = attack_end,
+        release_start = release_start,
+        end = end,
+        attack_expr = attack_expr,
+        release_expr = release_expr
+    )
+}
+
 pub fn build_cine_motion_filtergraph(
     events: &[CineMotionEvent],
     output_width: u32,
@@ -719,7 +756,7 @@ pub fn build_cine_motion_filtergraph(
     for event in events {
         let env = cine_event_envelope_expr(event);
         match event.event_type {
-            CineMotionEventType::Zoom => {
+            CineMotionEventType::Zoom | CineMotionEventType::HitPush => {
                 let amp = (event.strength.clamp(1.0, 1.10) - 1.0).clamp(0.0, 0.10);
                 if amp > 0.0 {
                     zoom_terms.push(format!("({amp:.5}*({env}))", amp = amp, env = env));
@@ -749,6 +786,25 @@ pub fn build_cine_motion_filtergraph(
                 }
                 if y.abs() > f64::EPSILON {
                     pan_y_terms.push(format!("({y:.5}*({env}))", y = y, env = env));
+                }
+            }
+            CineMotionEventType::BreathingZoom => {
+                if let Some(end_sec) = event.end_sec {
+                    if end_sec > event.time_sec {
+                        let env = cine_interval_envelope_expr(event);
+                        let amp = (event.strength.clamp(1.0, 1.10) - 1.0).clamp(0.0, 0.10);
+                        let period = event.period_sec.clamp(1.0, 12.0);
+                        let start = event.time_sec.max(0.0);
+                        if amp > 0.0 {
+                            zoom_terms.push(format!(
+                                "({amp:.5}*(0.5-0.5*cos(2*PI*(t-{start:.5})/{period:.5}))*({env}))",
+                                amp = amp,
+                                start = start,
+                                period = period,
+                                env = env
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -2395,12 +2451,38 @@ mod tests {
                 offset_y: 0.0,
                 focus_x_ratio: None,
                 focus_y_ratio: None,
+                end_sec: None,
+                period_sec: 4.0,
             }],
             1080,
             1920,
         );
         assert!(g.contains("max(1.0,min(1.10,1.0+"));
         assert!(g.contains("crop=1080:1920:x="));
+    }
+
+    #[test]
+    fn cine_motion_filtergraph_supports_hit_push() {
+        let g = build_cine_motion_filtergraph(
+            &[CineMotionEvent {
+                time_sec: 2.0,
+                event_type: CineMotionEventType::HitPush,
+                strength: 1.09,
+                attack_sec: 0.12,
+                release_sec: 0.55,
+                easing: MotionEasing::EaseOutCubic,
+                offset_x: 0.0,
+                offset_y: 0.0,
+                focus_x_ratio: None,
+                focus_y_ratio: None,
+                end_sec: None,
+                period_sec: 4.0,
+            }],
+            1080,
+            1920,
+        );
+        assert!(g.contains("t-2.00000"));
+        assert!(g.contains("max(1.0,min(1.10,1.0+"));
     }
 
     #[test]

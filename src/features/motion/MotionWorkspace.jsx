@@ -7,6 +7,7 @@ const LEGACY_SETTINGS_KEY = "naVShorts.effects.v1";
 const SETTINGS_KEY = "naVShorts.motion.v1";
 const CINE_SETTINGS_KEY = "naVShorts.cineMotion.v1";
 const DEFAULT_MOTION_MODE = "cineMotion";
+const DEFAULT_WORK_DIR = "S:\\tools\\codex\\workdir\\naVShorts";
 const CINE_DEFAULTS = {
   zoomSoftStrength: 1.05,
   zoomStrongStrength: 1.08,
@@ -18,6 +19,9 @@ const CINE_DEFAULTS = {
   cursorFocusStrength: 1.06,
   cursorFocusAttackSec: 0.15,
   cursorFocusReleaseSec: 1.05,
+  hitPushStrength: 1.09,
+  hitPushAttackSec: 0.12,
+  hitPushReleaseSec: 0.55,
   easing: "easeOutCubic",
 };
 
@@ -49,10 +53,11 @@ function timestampYYMMDDhhmmss(d = new Date()) {
   return `${yy}${mm}${dd}${hh}${mi}${ss}`;
 }
 
-function buildDefaultOutputPath(inputFullPath) {
+function buildDefaultOutputPath(inputFullPath, workDir = DEFAULT_WORK_DIR) {
   const normalized = inputFullPath.replace(/\//g, "\\");
   const lastSlash = normalized.lastIndexOf("\\");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
+  const configuredWorkDir = (workDir || DEFAULT_WORK_DIR).trim().replace(/\//g, "\\");
+  const dir = configuredWorkDir.endsWith("\\") ? configuredWorkDir : `${configuredWorkDir}\\`;
   const file = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
   const dot = file.lastIndexOf(".");
   const base = dot > 0 ? file.slice(0, dot) : file;
@@ -60,7 +65,7 @@ function buildDefaultOutputPath(inputFullPath) {
   return `${dir}${base}_exported_${timestampYYMMDDhhmmss()}${ext}`;
 }
 
-function buildLabeledOutputPath(inputFullPath, label) {
+function buildFinalOutputPath(inputFullPath, label = "exported") {
   const normalized = inputFullPath.replace(/\//g, "\\");
   const lastSlash = normalized.lastIndexOf("\\");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
@@ -71,12 +76,24 @@ function buildLabeledOutputPath(inputFullPath, label) {
   return `${dir}${base}_${label}_${timestampYYMMDDhhmmss()}${ext}`;
 }
 
-function buildCineOutputPath(inputFullPath) {
-  return buildLabeledOutputPath(inputFullPath, "cinemotion");
+function buildLabeledOutputPath(inputFullPath, label, workDir = DEFAULT_WORK_DIR) {
+  const normalized = inputFullPath.replace(/\//g, "\\");
+  const lastSlash = normalized.lastIndexOf("\\");
+  const configuredWorkDir = (workDir || DEFAULT_WORK_DIR).trim().replace(/\//g, "\\");
+  const dir = configuredWorkDir.endsWith("\\") ? configuredWorkDir : `${configuredWorkDir}\\`;
+  const file = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const dot = file.lastIndexOf(".");
+  const base = dot > 0 ? file.slice(0, dot) : file;
+  const ext = dot > 0 ? file.slice(dot) : ".mp4";
+  return `${dir}${base}_${label}_${timestampYYMMDDhhmmss()}${ext}`;
 }
 
-function buildPreviewOutputPath(currentOutputPath, inputFullPath) {
-  const source = (currentOutputPath || "").trim() || buildDefaultOutputPath(inputFullPath || "");
+function buildCineOutputPath(inputFullPath, workDir = DEFAULT_WORK_DIR) {
+  return buildLabeledOutputPath(inputFullPath, "cinemotion", workDir);
+}
+
+function buildPreviewOutputPath(currentOutputPath, inputFullPath, workDir = DEFAULT_WORK_DIR) {
+  const source = buildDefaultOutputPath(inputFullPath || currentOutputPath || "", workDir);
   const normalized = source.replace(/\//g, "\\");
   const dot = normalized.lastIndexOf(".");
   if (dot > 0) return `${normalized.slice(0, dot)}_preview${normalized.slice(dot)}`;
@@ -89,6 +106,101 @@ function secondsLabel(sec) {
   const s = Math.floor(total % 60);
   const cs = Math.floor((total - Math.floor(total)) * 100);
   return `${pad2(m)}:${pad2(s)}.${pad2(cs)}`;
+}
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, Number(value) || 0));
+}
+
+function sanitizeCineEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  const rawType = typeof event.type === "string" ? event.type : "";
+  const type = rawType === "breathingZoom" ? "hitPush" : rawType;
+  if (!["zoom", "pan", "cursorFocus", "hitPush"].includes(type)) return null;
+
+  const next = {
+    timeSec: Math.max(0, Number(event.timeSec) || 0),
+    type,
+    strength: clampNumber(event.strength ?? (type === "hitPush" ? CINE_DEFAULTS.hitPushStrength : 1), 1, 1.1),
+    attackSec: clampNumber(event.attackSec ?? CINE_DEFAULTS.zoomAttackSec, 0.03, 1),
+    releaseSec: clampNumber(event.releaseSec ?? CINE_DEFAULTS.zoomReleaseSec, 0.1, 4),
+    easing: event.easing === "easeOutQuart" ? "easeOutQuart" : CINE_DEFAULTS.easing,
+    offsetX: clampNumber(event.offsetX, -0.1, 0.1),
+    offsetY: clampNumber(event.offsetY, -0.1, 0.1),
+    focusXRatio: Number.isFinite(Number(event.focusXRatio)) ? clampNumber(event.focusXRatio, 0, 1) : null,
+    focusYRatio: Number.isFinite(Number(event.focusYRatio)) ? clampNumber(event.focusYRatio, 0, 1) : null,
+  };
+
+  if (type === "hitPush") {
+    next.attackSec = clampNumber(event.attackSec ?? CINE_DEFAULTS.hitPushAttackSec, 0.03, 1);
+    next.releaseSec = clampNumber(event.releaseSec ?? CINE_DEFAULTS.hitPushReleaseSec, 0.1, 4);
+  }
+
+  return next;
+}
+
+function sanitizeCineEvents(events) {
+  if (!Array.isArray(events)) return [];
+  return events
+    .map(sanitizeCineEvent)
+    .filter(Boolean)
+    .sort((a, b) => Number(a.timeSec || 0) - Number(b.timeSec || 0));
+}
+
+function easeOut(value, easing = CINE_DEFAULTS.easing) {
+  const x = clampNumber(value, 0, 1);
+  const power = easing === "easeOutQuart" ? 4 : 3;
+  return 1 - ((1 - x) ** power);
+}
+
+function cineEnvelope(event, currentTime) {
+  const start = Math.max(0, Number(event.timeSec) || 0);
+  const attack = clampNumber(event.attackSec ?? CINE_DEFAULTS.zoomAttackSec, 0.03, 1.0);
+  const release = clampNumber(event.releaseSec ?? CINE_DEFAULTS.zoomReleaseSec, 0.1, 4.0);
+  const attackEnd = start + attack;
+  const releaseEnd = attackEnd + release;
+  const t = Number(currentTime) || 0;
+
+  if (t < start || t >= releaseEnd) return 0;
+  if (t < attackEnd) return easeOut((t - start) / attack, event.easing);
+  return clampNumber(1 - (((t - attackEnd) / release) ** (event.easing === "easeOutQuart" ? 4 : 3)), 0, 1);
+}
+
+function computeCinePreview(events, currentTime) {
+  let zoomAdd = 0;
+  let panX = 0;
+  let panY = 0;
+
+  events.forEach((event) => {
+    if (!event || typeof event !== "object") return;
+    const env = cineEnvelope(event, currentTime);
+    if (env <= 0) return;
+
+    if (event.type === "zoom" || event.type === "hitPush") {
+      zoomAdd += clampNumber((event.strength ?? 1) - 1, 0, 0.1) * env;
+      return;
+    }
+
+    if (event.type === "pan") {
+      panX += clampNumber(event.offsetX, -0.1, 0.1) * env;
+      panY += clampNumber(event.offsetY, -0.1, 0.1) * env;
+      return;
+    }
+
+    if (event.type === "cursorFocus") {
+      const fx = clampNumber(event.focusXRatio ?? 0.5, 0, 1);
+      const fy = clampNumber(event.focusYRatio ?? 0.5, 0, 1);
+      zoomAdd += clampNumber((event.strength ?? 1) - 1, 0, 0.1) * env;
+      panX += clampNumber((fx - 0.5) * 0.2 + (Number(event.offsetX) || 0), -0.1, 0.1) * env;
+      panY += clampNumber((fy - 0.5) * 0.2 + (Number(event.offsetY) || 0), -0.1, 0.1) * env;
+    }
+  });
+
+  return {
+    zoom: clampNumber(1 + zoomAdd, 1, 1.1),
+    panX: clampNumber(panX, -0.1, 0.1),
+    panY: clampNumber(panY, -0.1, 0.1),
+  };
 }
 
 function ActionButton({ icon: Icon, children, className = "", ...props }) {
@@ -114,6 +226,7 @@ function Field({ label, children }) {
 
 export default function MotionWorkspace({ reframedInput }) {
   const cineVideoRef = useRef(null);
+  const [appConfig, setAppConfig] = useState({ workDir: DEFAULT_WORK_DIR });
   const [motionMode, setMotionMode] = useState(DEFAULT_MOTION_MODE);
   const [videoPath, setVideoPath] = useState("");
   const [outputPath, setOutputPath] = useState("");
@@ -141,6 +254,7 @@ export default function MotionWorkspace({ reframedInput }) {
   const [cineBlobUrl, setCineBlobUrl] = useState("");
   const [cineHoverPoint, setCineHoverPoint] = useState({ x: 0.5, y: 0.5 });
   const [cineVideoInfo, setCineVideoInfo] = useState(null);
+  const [cineCurrentTime, setCineCurrentTime] = useState(0);
 
   useEffect(() => {
     try {
@@ -164,7 +278,7 @@ export default function MotionWorkspace({ reframedInput }) {
         if (typeof s.preset === "string") setCinePreset(s.preset);
         if (typeof s.encoder === "string") setCineEncoder(s.encoder);
         if (typeof s.playbackRate === "string") setCinePlaybackRate(s.playbackRate);
-        if (Array.isArray(s.events)) setCineEvents(s.events);
+        if (Array.isArray(s.events)) setCineEvents(sanitizeCineEvents(s.events));
       }
     } catch {
       // ignore
@@ -205,6 +319,9 @@ export default function MotionWorkspace({ reframedInput }) {
     invoke("get_project")
       .then((project) => setProjectInfo(JSON.stringify(project, null, 2)))
       .catch(() => {});
+    invoke("get_app_config")
+      .then((cfg) => setAppConfig({ workDir: cfg.workDir || DEFAULT_WORK_DIR }))
+      .catch(() => {});
     invoke("get_encoder_options")
       .then((available) => {
         if (!available.includes(encoder) && !["auto", "cpu"].includes(encoder)) setEncoder("auto");
@@ -221,9 +338,9 @@ export default function MotionWorkspace({ reframedInput }) {
       try {
         setStatusText("Loading reframed video from Reframe workspace...");
         setVideoPath(reframedInput);
-        setOutputPath(buildDefaultOutputPath(reframedInput));
+        setOutputPath(buildFinalOutputPath(reframedInput, "exported"));
         setCineVideoPath(reframedInput);
-        setCineOutputPath((current) => current || buildCineOutputPath(reframedInput));
+        setCineOutputPath(buildFinalOutputPath(reframedInput, "cinemotion"));
 
         if (motionMode === "cineMotion") {
           await loadCineVideo(reframedInput, { silent: true });
@@ -247,12 +364,78 @@ export default function MotionWorkspace({ reframedInput }) {
     return () => {
       alive = false;
     };
-  }, [motionMode, reframedInput]);
+  }, [appConfig.workDir, motionMode, reframedInput]);
 
   useEffect(() => {
     const video = cineVideoRef.current;
     if (video) video.playbackRate = Number(cinePlaybackRate || 1);
   }, [cinePlaybackRate, cineBlobUrl]);
+
+  const recordHitPushEvent = () => {
+    if (!cineVideoRef.current?.src) {
+      setStatusText("Load a video before recording Hit Push.");
+      return;
+    }
+
+    setCineEvents((prev) => {
+      const current = cineVideoRef.current;
+      const now = Number.isFinite(current.currentTime) ? Number(current.currentTime.toFixed(3)) : 0;
+      const nextEvent = {
+        timeSec: now,
+        type: "hitPush",
+        strength: CINE_DEFAULTS.hitPushStrength,
+        attackSec: CINE_DEFAULTS.hitPushAttackSec,
+        releaseSec: CINE_DEFAULTS.hitPushReleaseSec,
+        easing: CINE_DEFAULTS.easing,
+        offsetX: 0,
+        offsetY: 0,
+        focusXRatio: null,
+        focusYRatio: null,
+      };
+      setStatusText(`Recorded Hit Push at ${secondsLabel(now)}.`);
+      return [...prev, nextEvent].sort((a, b) => Number(a.timeSec || 0) - Number(b.timeSec || 0));
+    });
+  };
+
+  useEffect(() => {
+    if (motionMode !== "cineMotion") return undefined;
+    const video = cineVideoRef.current;
+    if (!video) return undefined;
+
+    let frameId = 0;
+    const updateTime = () => {
+      setCineCurrentTime(Number.isFinite(video.currentTime) ? video.currentTime : 0);
+    };
+    const tick = () => {
+      updateTime();
+      if (!video.paused && !video.ended) frameId = window.requestAnimationFrame(tick);
+    };
+    const start = () => {
+      window.cancelAnimationFrame(frameId);
+      tick();
+    };
+    const stop = () => {
+      updateTime();
+      window.cancelAnimationFrame(frameId);
+    };
+
+    video.addEventListener("play", start);
+    video.addEventListener("pause", stop);
+    video.addEventListener("ended", stop);
+    video.addEventListener("seeked", updateTime);
+    video.addEventListener("timeupdate", updateTime);
+    updateTime();
+    if (!video.paused && !video.ended) start();
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      video.removeEventListener("play", start);
+      video.removeEventListener("pause", stop);
+      video.removeEventListener("ended", stop);
+      video.removeEventListener("seeked", updateTime);
+      video.removeEventListener("timeupdate", updateTime);
+    };
+  }, [cineBlobUrl, motionMode]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -296,6 +479,8 @@ export default function MotionWorkspace({ reframedInput }) {
           focusXRatio: patch.focusXRatio ?? null,
           focusYRatio: patch.focusYRatio ?? null,
         };
+        if (patch.endSec !== undefined) nextEvent.endSec = patch.endSec;
+        if (patch.periodSec !== undefined) nextEvent.periodSec = patch.periodSec;
         setCineEvents((prev) => [...prev, nextEvent].sort((a, b) => Number(a.timeSec || 0) - Number(b.timeSec || 0)));
         setStatusText(`Recorded ${nextEvent.type} event at ${secondsLabel(nextEvent.timeSec)}.`);
       };
@@ -335,13 +520,17 @@ export default function MotionWorkspace({ reframedInput }) {
             focusYRatio: cineHoverPoint.y,
           });
           break;
+        case "q":
+          event.preventDefault();
+          recordHitPushEvent();
+          break;
         default:
           break;
       }
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [cineHoverPoint, motionMode]);
+  }, [cineHoverPoint, motionMode, recordHitPushEvent]);
 
   useEffect(() => () => {
     if (cineBlobUrl.startsWith("blob:")) URL.revokeObjectURL(cineBlobUrl);
@@ -430,9 +619,9 @@ export default function MotionWorkspace({ reframedInput }) {
       }
       const info = await invoke("open_video", { path: picked });
       setVideoPath(picked);
-      setOutputPath(buildDefaultOutputPath(picked));
+      setOutputPath(buildFinalOutputPath(picked, "exported"));
       setCineVideoPath(picked);
-      setCineOutputPath((current) => current || buildCineOutputPath(picked));
+      setCineOutputPath(buildFinalOutputPath(picked, "cinemotion"));
       setStatusText("Video loaded.");
       setProjectInfo(JSON.stringify(info, null, 2));
       const project = await invoke("get_project");
@@ -446,16 +635,32 @@ export default function MotionWorkspace({ reframedInput }) {
     try {
       const kind = preview ? "preview" : "export";
       await prepareEffectsForRender(kind);
-      const finalOutputPath = preview ? buildPreviewOutputPath(outputPath.trim(), videoPath.trim()) : outputPath.trim();
+      const cleanup = await invoke("cleanup_work_dir");
+      if (cleanup?.deletedFiles) {
+        setStatusText(`Cleaned ${cleanup.deletedFiles} old work files before ${kind}.`);
+      }
+      const finalDestinationPath = outputPath.trim() || buildFinalOutputPath(videoPath.trim(), "exported");
+      if (!outputPath.trim()) setOutputPath(finalDestinationPath);
+      const renderOutputPath = preview
+        ? buildPreviewOutputPath(outputPath.trim(), videoPath.trim(), appConfig.workDir)
+        : buildDefaultOutputPath(videoPath.trim(), appConfig.workDir);
       const jobId = await invoke("render", {
         request: {
-          outputPath: finalOutputPath,
+          outputPath: renderOutputPath,
           preset,
           preview,
           encoder,
         },
       });
-      await trackRenderJob(jobId, preview ? "Preview completed" : "Completed");
+      const status = await trackRenderJob(jobId, preview ? "Preview completed" : "Completed");
+      if (!preview && status?.state === "completed") {
+        const movedPath = await invoke("move_file_to_path", {
+          sourcePath: renderOutputPath,
+          targetPath: finalDestinationPath,
+        });
+        setOutputPath(movedPath);
+        setStatusText(`Completed. Output moved to ${movedPath}`);
+      }
     } catch (error) {
       setStatusText(String(error));
       setProgress(0);
@@ -477,13 +682,13 @@ export default function MotionWorkspace({ reframedInput }) {
     const info = await invoke("open_video", { path });
     setCineVideoInfo(info);
     setCineVideoPath(path);
-    setCineOutputPath((current) => current || buildCineOutputPath(path));
+    setCineOutputPath(buildFinalOutputPath(path, "cinemotion"));
     const previewPath = await invoke("create_preview_video_with_audio", { path });
     setCinePreviewPath(previewPath);
     if (cineBlobUrl.startsWith("blob:")) URL.revokeObjectURL(cineBlobUrl);
     const blobUrl = await loadPreviewBlobUrl(previewPath);
     setCineBlobUrl(blobUrl);
-    setCineMeta(`Video ${info.width}x${info.height} | ${info.fps.toFixed(2)} fps | duration ${info.duration_sec.toFixed(2)} sec | events ${cineEvents.length}`);
+    setCineMeta(`Video ${info.width}x${info.height} | ${info.fps.toFixed(2)} fps | duration ${info.duration_sec.toFixed(2)} sec | events ${sanitizeCineEvents(cineEvents).length}`);
     if (!silent) setStatusText("Source video loaded for Cine Motion.");
   };
 
@@ -525,21 +730,36 @@ export default function MotionWorkspace({ reframedInput }) {
   const startCineRender = async (preview) => {
     try {
       if (!cineVideoPath.trim()) throw new Error("Load a video before rendering Cine Motion.");
-      if (!cineEvents.length) throw new Error("Add at least one Cine Motion event before rendering.");
-      const output = cineOutputPath.trim() || buildCineOutputPath(cineVideoPath.trim());
+      const eventsForRender = sanitizeCineEvents(cineEvents);
+      if (!eventsForRender.length) throw new Error("Add at least one Cine Motion event before rendering.");
+      const output = cineOutputPath.trim() || buildFinalOutputPath(cineVideoPath.trim(), "cinemotion");
       if (!cineOutputPath.trim()) setCineOutputPath(output);
-      const finalOutputPath = preview ? buildPreviewOutputPath(output, cineVideoPath.trim()) : output;
+      const renderOutputPath = preview
+        ? buildPreviewOutputPath(output, cineVideoPath.trim(), appConfig.workDir)
+        : buildCineOutputPath(cineVideoPath.trim(), appConfig.workDir);
+      const cleanup = await invoke("cleanup_work_dir");
+      if (cleanup?.deletedFiles) {
+        setStatusText(`Cleaned ${cleanup.deletedFiles} old work files before Cine Motion ${preview ? "preview" : "export"}.`);
+      }
       const jobId = await invoke("render_cine_motion", {
         request: {
           inputPath: cineVideoPath.trim(),
-          outputPath: finalOutputPath,
+          outputPath: renderOutputPath,
           preset: cinePreset,
           preview,
           encoder: cineEncoder,
-          events: cineEvents,
+          events: eventsForRender,
         },
       });
-      await trackRenderJob(jobId, preview ? "Cine preview completed" : "Cine Motion completed");
+      const status = await trackRenderJob(jobId, preview ? "Cine preview completed" : "Cine Motion completed");
+      if (!preview && status?.state === "completed") {
+        const movedPath = await invoke("move_file_to_path", {
+          sourcePath: renderOutputPath,
+          targetPath: output,
+        });
+        setCineOutputPath(movedPath);
+        setStatusText(`Cine Motion completed. Output moved to ${movedPath}`);
+      }
     } catch (error) {
       setStatusText(String(error));
       setProgress(0);
@@ -547,8 +767,12 @@ export default function MotionWorkspace({ reframedInput }) {
     }
   };
 
-  const cineJson = useMemo(() => JSON.stringify(cineEvents, null, 2), [cineEvents]);
-  const canRenderCineMotion = cineEvents.length > 0;
+  const safeCineEvents = useMemo(() => sanitizeCineEvents(cineEvents), [cineEvents]);
+  const cineJson = useMemo(() => JSON.stringify(safeCineEvents, null, 2), [safeCineEvents]);
+  const canRenderCineMotion = safeCineEvents.length > 0;
+  const cinePreview = useMemo(() => computeCinePreview(safeCineEvents, cineCurrentTime), [safeCineEvents, cineCurrentTime]);
+  const livePreviewZoom = cinePreview.zoom;
+  const cinePreviewTransform = `translate(${(-cinePreview.panX * 60).toFixed(2)}%, ${(-cinePreview.panY * 60).toFixed(2)}%) scale(${livePreviewZoom.toFixed(4)})`;
 
   return (
     <div className="grid min-h-full grid-cols-[minmax(0,1.6fr)_340px] gap-4">
@@ -661,13 +885,14 @@ export default function MotionWorkspace({ reframedInput }) {
           </div>
         ) : (
           <>
-            <div className="mt-4 overflow-hidden rounded-[26px] border border-line bg-[#09101d] shadow-[0_18px_36px_rgba(15,23,42,0.18)]">
+            <div className="relative mt-4 overflow-hidden rounded-[26px] border border-line bg-[#09101d] shadow-[0_18px_36px_rgba(15,23,42,0.18)]">
               <video
                 ref={cineVideoRef}
                 src={cineBlobUrl}
                 controls
                 playsInline
-                className="block h-[clamp(420px,56vh,700px)] w-full bg-[#09101d] object-contain"
+                className="block h-[clamp(420px,56vh,700px)] w-full origin-center bg-[#09101d] object-contain transition-transform duration-75 ease-out"
+                style={{ transform: cinePreviewTransform }}
                 onLoadedMetadata={(event) => {
                   setCineMeta(`Video ${event.currentTarget.videoWidth || cineVideoInfo?.width || 0}x${event.currentTarget.videoHeight || cineVideoInfo?.height || 0} | ${cineVideoInfo?.fps?.toFixed?.(2) || "0.00"} fps | duration ${Number(event.currentTarget.duration || cineVideoInfo?.duration_sec || 0).toFixed(2)} sec | events ${cineEvents.length}`);
                 }}
@@ -680,6 +905,9 @@ export default function MotionWorkspace({ reframedInput }) {
                   });
                 }}
               />
+              <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-white/15 bg-black/55 px-3 py-1.5 text-xs font-semibold text-white shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur">
+                Live preview · {secondsLabel(cineCurrentTime)} · zoom {livePreviewZoom.toFixed(2)} · pan {cinePreview.panX.toFixed(2)}, {cinePreview.panY.toFixed(2)}
+              </div>
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-4 text-sm text-muted">
@@ -721,9 +949,15 @@ export default function MotionWorkspace({ reframedInput }) {
                     <option value="2">2.0x</option>
                   </select>
                 </Field>
-                <div className="grid grid-cols-2 gap-3 self-end">
+                <div className="grid grid-cols-3 gap-3 self-end">
                   <ActionButton icon={Play} onClick={toggleCinePlayback} className="app-btn-ghost">
                     Play / Pause
+                  </ActionButton>
+                  <ActionButton
+                    onClick={recordHitPushEvent}
+                    className="app-btn-secondary"
+                  >
+                    Q Hit Push
                   </ActionButton>
                   <ActionButton onClick={undoLastCineEvent} className="app-btn-secondary">
                     Undo Last Event
@@ -731,7 +965,7 @@ export default function MotionWorkspace({ reframedInput }) {
                 </div>
               </div>
               <div className="rounded-[20px] border border-line bg-[#fbfcfe] px-4 py-3 text-sm leading-6 text-muted">
-                Shortcuts: Space play/pause, left/right move 5 sec, Z soft zoom, X strong zoom, C cursor focus, V/B pan left/right, N/M pan up/down, Ctrl+Z undo.
+                Shortcuts: Space play/pause, left/right move 5 sec, Q hit push, Z soft zoom, X strong zoom, C cursor focus, V/B pan left/right, N/M pan up/down, Ctrl+Z undo.
               </div>
               {!canRenderCineMotion ? (
                 <div className="rounded-[20px] border border-[#fecdca] bg-[#fff7f5] px-4 py-3 text-sm leading-6 text-[#b42318]">
@@ -792,7 +1026,7 @@ export default function MotionWorkspace({ reframedInput }) {
           <>
             <div className="mt-6 flex items-center justify-between">
               <h2 className="text-[26px] font-semibold tracking-tight text-ink">Cine Events</h2>
-              <div className="text-sm text-muted">{cineEvents.length} saved</div>
+              <div className="text-sm text-muted">{safeCineEvents.length} saved</div>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-3">
               <ActionButton onClick={() => setCineEvents((prev) => [...prev].sort((a, b) => Number(a.timeSec || 0) - Number(b.timeSec || 0)))} className="bg-[#f7f9fc] text-ink shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
@@ -803,12 +1037,12 @@ export default function MotionWorkspace({ reframedInput }) {
               </ActionButton>
             </div>
             <div className="mt-4 grid max-h-[190px] gap-3 overflow-auto pr-1">
-              {cineEvents.length === 0 ? (
+              {safeCineEvents.length === 0 ? (
                 <div className="rounded-[18px] border border-dashed border-line bg-[#f8fafc] px-4 py-5 text-sm text-muted">
                   No Cine Motion events yet.
                 </div>
               ) : (
-                cineEvents.map((event, index) => (
+                safeCineEvents.map((event, index) => (
                   <div key={`${event.timeSec}-${index}`} className="flex items-start justify-between gap-3 rounded-[18px] border border-line bg-[#f8fafc] px-4 py-3">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-ink">
@@ -816,6 +1050,7 @@ export default function MotionWorkspace({ reframedInput }) {
                       </div>
                       <div className="mt-1 text-xs text-muted">
                         strength {Number(event.strength || 1).toFixed(2)} / attack {Number(event.attackSec || 0).toFixed(2)} / release {Number(event.releaseSec || 0).toFixed(2)}
+                        {event.type === "hitPush" ? " / returns home" : ""}
                       </div>
                     </div>
                     <div className="flex gap-2">
@@ -831,7 +1066,7 @@ export default function MotionWorkspace({ reframedInput }) {
                         Jump
                       </ActionButton>
                       <ActionButton
-                        onClick={() => setCineEvents((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                        onClick={() => setCineEvents((prev) => sanitizeCineEvents(prev).filter((_, itemIndex) => itemIndex !== index))}
                         className="min-h-[36px] bg-white px-3 py-2 text-ink shadow-none"
                       >
                         Delete

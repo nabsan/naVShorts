@@ -6,6 +6,7 @@ import PreReframeWorkspace from "../preReframe/PreReframeWorkspace";
 
 const SETTINGS_KEY = "naVShorts.reframe.v2";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
+const DEFAULT_WORK_DIR = "S:\\tools\\codex\\workdir\\naVShorts";
 const ENGINE_PRESETS = {
   faceIdentity: { trackingStrength: 0.78, identityThreshold: 0.58, stability: 0.76 },
   yoloDeepsortPerson: { trackingStrength: 0.8, identityThreshold: 0.6, stability: 0.74 },
@@ -15,6 +16,7 @@ const ENGINE_PRESETS = {
 
 const DEFAULT_CONFIG = {
   targetFaceFolder: DEFAULT_FACE_FOLDER,
+  workDir: DEFAULT_WORK_DIR,
   assistJsonDir: "",
   previewProxyDir: "",
   configPath: "",
@@ -50,7 +52,19 @@ function timestampYYMMDDhhmmss(d = new Date()) {
   return `${yy}${mm}${dd}${hh}${mi}${ss}`;
 }
 
-function buildOutputPath(inputFullPath) {
+function buildOutputPath(inputFullPath, workDir = DEFAULT_WORK_DIR) {
+  const normalized = inputFullPath.replace(/\//g, "\\");
+  const lastSlash = normalized.lastIndexOf("\\");
+  const configuredWorkDir = (workDir || DEFAULT_WORK_DIR).trim().replace(/\//g, "\\");
+  const dir = configuredWorkDir.endsWith("\\") ? configuredWorkDir : `${configuredWorkDir}\\`;
+  const file = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const dot = file.lastIndexOf(".");
+  const base = dot > 0 ? file.slice(0, dot) : file;
+  const ext = dot > 0 ? file.slice(dot) : ".mp4";
+  return `${dir}${base}_reframed_${timestampYYMMDDhhmmss()}${ext}`;
+}
+
+function buildFinalOutputPath(inputFullPath) {
   const normalized = inputFullPath.replace(/\//g, "\\");
   const lastSlash = normalized.lastIndexOf("\\");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
@@ -61,10 +75,23 @@ function buildOutputPath(inputFullPath) {
   return `${dir}${base}_reframed_${timestampYYMMDDhhmmss()}${ext}`;
 }
 
+function buildPreviewOutputPath(inputFullPath, workDir = DEFAULT_WORK_DIR) {
+  const path = buildOutputPath(inputFullPath, workDir);
+  const dot = path.lastIndexOf(".");
+  if (dot > 0) return `${path.slice(0, dot)}_preview${path.slice(dot)}`;
+  return `${path}_preview.mp4`;
+}
+
 function directoryOf(pathValue) {
   const normalized = (pathValue || "").replace(/\//g, "\\");
   const lastSlash = normalized.lastIndexOf("\\");
   return lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
+}
+
+function fileNameOf(pathValue) {
+  const normalized = (pathValue || "").replace(/\//g, "\\");
+  const lastSlash = normalized.lastIndexOf("\\");
+  return lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
 }
 
 function ActionButton({ icon: Icon, children, className = "", ...props }) {
@@ -85,6 +112,18 @@ function Field({ label, children }) {
       <span className="text-sm font-semibold text-[#344054]">{label}</span>
       {children}
     </label>
+  );
+}
+
+function SummaryItem({ label, value, empty = "Not set" }) {
+  const displayValue = value?.trim() ? value : empty;
+  return (
+    <div className="min-w-0 rounded-[16px] border border-line bg-white px-4 py-3">
+      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{label}</div>
+      <div className={`mt-1 truncate text-sm font-semibold ${value?.trim() ? "text-ink" : "text-muted"}`} title={displayValue}>
+        {displayValue}
+      </div>
+    </div>
   );
 }
 
@@ -176,6 +215,7 @@ export default function ReframeWorkspace({ onSendToMotion }) {
       .then((cfg) => {
         const nextConfig = {
           targetFaceFolder: cfg.targetFaceFolder || DEFAULT_FACE_FOLDER,
+          workDir: cfg.workDir || DEFAULT_WORK_DIR,
           assistJsonDir: cfg.assistJsonDir || "",
           previewProxyDir: cfg.previewProxyDir || "",
           configPath: cfg.configPath || "",
@@ -218,7 +258,7 @@ export default function ReframeWorkspace({ onSendToMotion }) {
     if (!manualEngine) return;
     if (assistState.sourceVideoPath && assistState.sourceVideoPath !== sourceVideoPath) {
       setSourceVideoPath(assistState.sourceVideoPath);
-      setReframeOutputPath((current) => current || buildOutputPath(assistState.sourceVideoPath));
+      setReframeOutputPath(buildFinalOutputPath(assistState.sourceVideoPath));
     }
     if (assistState.targetFacePath && assistState.targetFacePath !== targetFacePath) {
       setTargetFacePath(assistState.targetFacePath);
@@ -226,7 +266,7 @@ export default function ReframeWorkspace({ onSendToMotion }) {
     if (assistState.assistJsonPath && assistState.assistJsonPath !== assistJsonPath) {
       setAssistJsonPath(assistState.assistJsonPath);
     }
-  }, [assistJsonPath, assistState, manualEngine, sourceVideoPath, targetFacePath]);
+  }, [appConfig.workDir, assistJsonPath, assistState, manualEngine, sourceVideoPath, targetFacePath]);
 
   const openSourceVideo = async () => {
     try {
@@ -237,7 +277,7 @@ export default function ReframeWorkspace({ onSendToMotion }) {
       }
       await invoke("open_video", { path: picked });
       setSourceVideoPath(picked);
-      setReframeOutputPath(buildOutputPath(picked));
+      setReframeOutputPath(buildFinalOutputPath(picked));
       setStatusText("Source video loaded for Reframe.");
     } catch (error) {
       setStatusText(String(error));
@@ -366,6 +406,11 @@ export default function ReframeWorkspace({ onSendToMotion }) {
         return;
       }
 
+      const cleanup = await invoke("cleanup_work_dir");
+      const cleanupNote = cleanup?.deletedFiles
+        ? ` Cleaned ${cleanup.deletedFiles} old work files before export.`
+        : "";
+
       if (trackingEngine === "manualAssistJson") {
         if (!assistState.sourceVideoPath.trim()) {
           setStatusLevel("error");
@@ -389,12 +434,15 @@ export default function ReframeWorkspace({ onSendToMotion }) {
       }
 
       setStatusLevel("running");
-      setStatusText(`${preview ? "Preview render" : "Final export"} requested. Preparing render job...`);
+      setStatusText(`${preview ? "Preview render" : "Final export"} requested. Preparing render job...${cleanupNote}`);
+      const renderOutputPath = preview
+        ? buildPreviewOutputPath(input, appConfig.workDir)
+        : buildOutputPath(input, appConfig.workDir);
 
       const jobId = await invoke("render_reframe", {
         request: {
           inputPath: input,
-          outputPath: out,
+          outputPath: renderOutputPath,
           targetFacePath: face || null,
           assistJsonPath: assistJson || null,
           preview,
@@ -408,11 +456,14 @@ export default function ReframeWorkspace({ onSendToMotion }) {
 
       const status = await trackRenderJob(jobId);
       if (status && status.state === "completed") {
-        setLastOutput(out);
+        const finalOutput = preview
+          ? renderOutputPath
+          : await invoke("move_file_to_path", { sourcePath: renderOutputPath, targetPath: out });
+        setLastOutput(finalOutput);
         const sourceRef = trackingEngine === "manualAssistJson" ? assistJson : face || "(none)";
         setStatusLevel("success");
         setStatusText(
-          `Reframe complete. Source reference: ${sourceRef} | tracking=${trackingStrength.toFixed(2)} id=${identityThreshold.toFixed(2)} stability=${stability.toFixed(2)} engine=${trackingEngine}`,
+          `Reframe complete. Output: ${finalOutput} | Source reference: ${sourceRef} | tracking=${trackingStrength.toFixed(2)} id=${identityThreshold.toFixed(2)} stability=${stability.toFixed(2)} engine=${trackingEngine}`,
         );
       } else if (status && status.state === "failed") {
         setStatusLevel("error");
@@ -516,51 +567,68 @@ export default function ReframeWorkspace({ onSendToMotion }) {
             {manualEngine ? "Step 2. Export Settings" : "Export Settings"}
           </h2>
           {manualEngine ? (
-            <div className="rounded-[20px] border border-line bg-[#fbfcfe] px-4 py-3 text-sm leading-6 text-muted">
-              This export section uses the source path, target face folder, and Assist JSON from the anchor workflow above.
+            <div className="rounded-[22px] border border-line bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-ink">Manual Assist is connected</div>
+                  <div className="mt-1 max-w-[720px] text-sm leading-6 text-muted">
+                    Export will use the source video, face folder, and Assist JSON generated in Step 1. Adjust anchor work above, then render here.
+                  </div>
+                </div>
+                <div className="rounded-full bg-[#eff6ff] px-3 py-1.5 text-sm font-semibold text-accent">
+                  {assistState.anchors.length} anchors
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                <SummaryItem label="Source" value={fileNameOf(sourceVideoPath)} />
+                <SummaryItem label="Face folder" value={fileNameOf(targetFacePath)} />
+                <SummaryItem label="Assist JSON" value={fileNameOf(assistJsonPath)} />
+              </div>
             </div>
           ) : null}
-          <div className="grid gap-2">
-            <div className="text-sm font-semibold text-[#344054]">Source video path</div>
-            <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-3">
-              <input value={sourceVideoPath} readOnly className="app-input app-input-readonly" />
-              <ActionButton icon={FolderOpen} onClick={openSourceVideo} disabled={manualEngine} className="app-btn-primary disabled:cursor-not-allowed disabled:opacity-50">
-                Select Source Video
-              </ActionButton>
-            </div>
-          </div>
+          {!manualEngine ? (
+            <>
+              <div className="grid gap-2">
+                <div className="text-sm font-semibold text-[#344054]">Source video path</div>
+                <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-3">
+                  <input value={sourceVideoPath} readOnly className="app-input app-input-readonly" />
+                  <ActionButton icon={FolderOpen} onClick={openSourceVideo} className="app-btn-primary">
+                    Select Source Video
+                  </ActionButton>
+                </div>
+              </div>
 
-          <div className="grid gap-2">
-            <div className="text-sm font-semibold text-[#344054]">Target face folder path</div>
-            <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-3">
-              <input value={targetFacePath} readOnly className="app-input app-input-readonly" />
-              <ActionButton
-                icon={FolderOpen}
-                onClick={pickTargetFaceFolder}
-                disabled={manualEngine}
-                className="app-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Select Target Face Folder
-              </ActionButton>
-            </div>
-          </div>
+              <div className="grid gap-2">
+                <div className="text-sm font-semibold text-[#344054]">Target face folder path</div>
+                <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-3">
+                  <input value={targetFacePath} readOnly className="app-input app-input-readonly" />
+                  <ActionButton
+                    icon={FolderOpen}
+                    onClick={pickTargetFaceFolder}
+                    className="app-btn-secondary"
+                  >
+                    Select Target Face Folder
+                  </ActionButton>
+                </div>
+              </div>
 
-          <div className="grid gap-2">
-            <div className="text-sm font-semibold text-[#344054]">Assist JSON path</div>
-            <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-3">
-              <input value={assistJsonPath} readOnly className="app-input app-input-readonly" />
-              <ActionButton
-                icon={FolderOpen}
-                onClick={pickAssistJson}
-                disabled={manualEngine}
-                className="app-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Select Assist JSON
-              </ActionButton>
-            </div>
-          </div>
+              <div className="grid gap-2">
+                <div className="text-sm font-semibold text-[#344054]">Assist JSON path</div>
+                <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-3">
+                  <input value={assistJsonPath} readOnly className="app-input app-input-readonly" />
+                  <ActionButton
+                    icon={FolderOpen}
+                    onClick={pickAssistJson}
+                    className="app-btn-secondary"
+                  >
+                    Select Assist JSON
+                  </ActionButton>
+                </div>
+              </div>
+            </>
+          ) : null}
 
-          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
+          <div className={`grid gap-4 ${manualEngine ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"}`}>
             <Field label="Tracking engine">
               <select
                 value={trackingEngine}
@@ -574,24 +642,24 @@ export default function ReframeWorkspace({ onSendToMotion }) {
                 ))}
               </select>
             </Field>
-            <div className="grid grid-cols-2 gap-3 self-end">
-              <ActionButton
-                icon={ScanFace}
-                onClick={() => scoreFaceFolder(false)}
-                disabled={manualEngine}
-                className="app-btn-ghost disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Score Face Folder
-              </ActionButton>
-              <ActionButton
-                icon={Sparkles}
-                onClick={() => scoreFaceFolder(true)}
-                disabled={manualEngine}
-                className="app-btn-ghost disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Score + Move Excluded
-              </ActionButton>
-            </div>
+            {!manualEngine ? (
+              <div className="grid grid-cols-2 gap-3 self-end">
+                <ActionButton
+                  icon={ScanFace}
+                  onClick={() => scoreFaceFolder(false)}
+                  className="app-btn-ghost"
+                >
+                  Score Face Folder
+                </ActionButton>
+                <ActionButton
+                  icon={Sparkles}
+                  onClick={() => scoreFaceFolder(true)}
+                  className="app-btn-ghost"
+                >
+                  Score + Move Excluded
+                </ActionButton>
+              </div>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-[220px_72px_minmax(0,1fr)] items-center gap-3">

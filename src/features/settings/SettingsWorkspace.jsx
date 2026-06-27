@@ -37,6 +37,8 @@ export default function SettingsWorkspace() {
   const [configPath, setConfigPath] = useState("");
   const [configScope, setConfigScope] = useState("");
   const [targetFaceFolder, setTargetFaceFolder] = useState("");
+  const [workDir, setWorkDir] = useState("");
+  const [workDirCleanupLimitGb, setWorkDirCleanupLimitGb] = useState("20");
   const [assistJsonDir, setAssistJsonDir] = useState("");
   const [previewProxyDir, setPreviewProxyDir] = useState("");
   const [preReframeDefaultEngine, setPreReframeDefaultEngine] = useState("yoloBytetrackArcface");
@@ -53,6 +55,8 @@ export default function SettingsWorkspace() {
       setConfigPath(cfg.configPath || "");
       setConfigScope(cfg.configScope || "");
       setTargetFaceFolder(cfg.targetFaceFolder || "");
+      setWorkDir(cfg.workDir || "");
+      setWorkDirCleanupLimitGb(String(cfg.workDirCleanupLimitGb || 20));
       setAssistJsonDir(cfg.assistJsonDir || "");
       setPreviewProxyDir(cfg.previewProxyDir || "");
       setPreReframeDefaultEngine(cfg.preReframeDefaultEngine || "yoloBytetrackArcface");
@@ -74,6 +78,8 @@ export default function SettingsWorkspace() {
       const cfg = await invoke("save_app_config", {
         config: {
           targetFaceFolder: targetFaceFolder.trim(),
+          workDir: workDir.trim(),
+          workDirCleanupLimitGb: Number(workDirCleanupLimitGb) || 20,
           assistJsonDir: assistJsonDir.trim(),
           previewProxyDir: previewProxyDir.trim(),
           preReframeDefaultEngine,
@@ -83,6 +89,14 @@ export default function SettingsWorkspace() {
       });
       setConfigPath(cfg.configPath || "");
       setConfigScope(cfg.configScope || "");
+      setTargetFaceFolder(cfg.targetFaceFolder || "");
+      setWorkDir(cfg.workDir || "");
+      setWorkDirCleanupLimitGb(String(cfg.workDirCleanupLimitGb || 20));
+      setAssistJsonDir(cfg.assistJsonDir || "");
+      setPreviewProxyDir(cfg.previewProxyDir || "");
+      setPreReframeDefaultEngine(cfg.preReframeDefaultEngine || "yoloBytetrackArcface");
+      setReframeDefaultEngine(cfg.reframeDefaultEngine || "manualAssistJson");
+      setEffectsDefaultZoomMode(cfg.effectsDefaultZoomMode || "zoomSineSmooth");
       printConfig(cfg);
       setStatusText(`Settings saved to ${cfg.configScope}: ${cfg.configPath}`);
     } catch (error) {
@@ -185,12 +199,39 @@ export default function SettingsWorkspace() {
           </div>
 
           <div className="grid gap-2">
-            <div className="text-sm font-semibold text-[#344054]">Default Assist JSON directory</div>
+            <div className="text-sm font-semibold text-[#344054]">naVShorts work directory</div>
             <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-3">
-              <input value={assistJsonDir} onChange={(e) => setAssistJsonDir(e.target.value)} placeholder="Blank = same folder as source video" className="app-input" />
+              <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="S:\\tools\\codex\\workdir\\naVShorts" className="app-input" />
+              <ActionButton icon={FolderOpen} onClick={() => pickFolderInto(setWorkDir, workDir)} className="app-btn-secondary">
+                Pick Folder
+              </ActionButton>
+            </div>
+            <div className="text-sm leading-6 text-muted">
+              Generated Assist JSON, render outputs, export logs, and debug text files should be kept here instead of beside the source video.
+            </div>
+          </div>
+
+          <Field label="Work directory cleanup limit (GB)">
+            <input
+              value={workDirCleanupLimitGb}
+              onChange={(e) => setWorkDirCleanupLimitGb(e.target.value)}
+              type="number"
+              min="1"
+              step="1"
+              className="app-input"
+            />
+          </Field>
+
+          <div className="grid gap-2">
+            <div className="text-sm font-semibold text-[#344054]">Assist JSON picker directory</div>
+            <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-3">
+              <input value={assistJsonDir} onChange={(e) => setAssistJsonDir(e.target.value)} placeholder="Blank = use naVShorts work directory when opening JSON" className="app-input" />
               <ActionButton icon={FolderOpen} onClick={() => pickFolderInto(setAssistJsonDir, assistJsonDir)} className="app-btn-secondary">
                 Pick Folder
               </ActionButton>
+            </div>
+            <div className="text-sm leading-6 text-muted">
+              New Assist JSON files are generated in the work directory. This picker directory is only used as a starting folder when loading an existing JSON.
             </div>
           </div>
 

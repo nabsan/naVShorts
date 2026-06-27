@@ -46,7 +46,7 @@ function getWorkspaceHints(workspaceId) {
     case "reframe":
       return ["Pause to place anchors", "Manual Assist JSON is the default flow"];
     case "motion":
-      return ["Space: play/pause", "Cine Motion shortcuts"];
+      return ["Space: play/pause", "Q: hit push accent"];
     case "settings":
       return ["Shared defaults live here", "Use reset only when UI state is stale"];
     default:
@@ -58,6 +58,7 @@ function MotionShortcutPanel() {
   const items = [
     "Space: play / pause",
     "Arrow Left / Right: seek 5 sec",
+    "Q: hit push accent",
     "Z: soft zoom in",
     "X: strong zoom in",
     "C: cursor focus",

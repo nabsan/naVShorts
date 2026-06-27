@@ -5,9 +5,11 @@ import { hasTauri, invoke, toVideoSrc } from "../../lib/tauri";
 
 const SETTINGS_KEY = "naVShorts.reframeAssist.v5";
 const DEFAULT_FACE_FOLDER = "S:\\tools\\codex\\waka_images";
+const DEFAULT_WORK_DIR = "S:\\tools\\codex\\workdir\\naVShorts";
 
 const DEFAULT_CONFIG = {
   targetFaceFolder: DEFAULT_FACE_FOLDER,
+  workDir: DEFAULT_WORK_DIR,
   assistJsonDir: "",
   previewProxyDir: "",
   configPath: "",
@@ -44,11 +46,11 @@ function directoryOf(pathValue) {
   return lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
 }
 
-function buildJsonPath(inputFullPath, assistJsonDir) {
+function buildJsonPath(inputFullPath, workDir = DEFAULT_WORK_DIR) {
   const normalized = inputFullPath.replace(/\//g, "\\");
   const lastSlash = normalized.lastIndexOf("\\");
-  const configuredDir = (assistJsonDir || "").trim();
-  const baseDir = configuredDir ? configuredDir.replace(/\//g, "\\") : (lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "");
+  const configuredWorkDir = (workDir || DEFAULT_WORK_DIR).trim();
+  const baseDir = configuredWorkDir.replace(/\//g, "\\");
   const dir = baseDir.endsWith("\\") ? baseDir : (baseDir ? `${baseDir}\\` : "");
   const file = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
   const dot = file.lastIndexOf(".");
@@ -199,6 +201,7 @@ export default function PreReframeWorkspace({ onSendToReframe, onAssistStateChan
         if (!alive) return;
         const nextConfig = {
           targetFaceFolder: cfg.targetFaceFolder || DEFAULT_FACE_FOLDER,
+          workDir: cfg.workDir || DEFAULT_WORK_DIR,
           assistJsonDir: cfg.assistJsonDir || "",
           previewProxyDir: cfg.previewProxyDir || "",
           configPath: cfg.configPath || "",
@@ -218,8 +221,8 @@ export default function PreReframeWorkspace({ onSendToReframe, onAssistStateChan
 
   useEffect(() => {
     if (!sourceVideoPath.trim() || assistJsonPath.trim()) return;
-    setAssistJsonPath(buildJsonPath(sourceVideoPath.trim(), appConfig.assistJsonDir));
-  }, [appConfig.assistJsonDir, assistJsonPath, sourceVideoPath]);
+    setAssistJsonPath(buildJsonPath(sourceVideoPath.trim(), appConfig.workDir));
+  }, [appConfig.workDir, assistJsonPath, sourceVideoPath]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -434,7 +437,7 @@ export default function PreReframeWorkspace({ onSendToReframe, onAssistStateChan
       const info = await invoke("open_video", { path: picked });
       setVideoInfo(info);
       setSourceVideoPath(picked);
-      setAssistJsonPath(buildJsonPath(picked, appConfig.assistJsonDir));
+      setAssistJsonPath(buildJsonPath(picked, appConfig.workDir));
       setAnchors([]);
       await attachPreviewForSource(picked);
       setStatus((prev) => ({ ...prev, message: "Source video loaded for Reframe Assist." }));

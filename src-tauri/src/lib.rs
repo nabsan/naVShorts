@@ -214,6 +214,8 @@ pub enum CineMotionEventType {
     Zoom,
     Pan,
     CursorFocus,
+    HitPush,
+    BreathingZoom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +235,10 @@ fn default_cine_attack_sec() -> f64 {
 
 fn default_cine_release_sec() -> f64 {
     1.0
+}
+
+fn default_cine_period_sec() -> f64 {
+    4.0
 }
 
 fn default_motion_easing() -> MotionEasing {
@@ -261,6 +267,10 @@ pub struct CineMotionEvent {
     pub focus_x_ratio: Option<f64>,
     #[serde(default)]
     pub focus_y_ratio: Option<f64>,
+    #[serde(default)]
+    pub end_sec: Option<f64>,
+    #[serde(default = "default_cine_period_sec")]
+    pub period_sec: f64,
 }
 
 impl CineMotionEvent {
@@ -291,6 +301,17 @@ impl CineMotionEvent {
         if let Some(v) = self.focus_y_ratio {
             if !v.is_finite() || !(0.0..=1.0).contains(&v) {
                 return Err("cine motion event focus_y_ratio must be between 0.0 and 1.0".to_string());
+            }
+        }
+        if matches!(self.event_type, CineMotionEventType::BreathingZoom) {
+            let Some(end_sec) = self.end_sec else {
+                return Err("breathing zoom event must have end_sec; press Q again to close the interval before rendering".to_string());
+            };
+            if !end_sec.is_finite() || end_sec <= self.time_sec + 0.25 {
+                return Err("breathing zoom event end_sec must be at least 0.25 sec after time_sec".to_string());
+            }
+            if !self.period_sec.is_finite() || !(1.0..=12.0).contains(&self.period_sec) {
+                return Err("breathing zoom event period_sec must be between 1.0 and 12.0".to_string());
             }
         }
         Ok(())
@@ -348,6 +369,10 @@ struct AppState {
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigPayload {
     pub target_face_folder: String,
+    #[serde(default = "default_work_dir_value")]
+    pub work_dir: String,
+    #[serde(default = "default_work_dir_cleanup_limit_gb")]
+    pub work_dir_cleanup_limit_gb: f64,
     pub assist_json_dir: String,
     pub preview_proxy_dir: String,
     pub pre_reframe_default_engine: String,
@@ -359,6 +384,8 @@ pub struct AppConfigPayload {
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigResponse {
     pub target_face_folder: String,
+    pub work_dir: String,
+    pub work_dir_cleanup_limit_gb: f64,
     pub assist_json_dir: String,
     pub preview_proxy_dir: String,
     pub pre_reframe_default_engine: String,
@@ -384,9 +411,21 @@ fn default_target_face_folder_value() -> String {
     }
 }
 
+fn default_work_dir_value() -> String {
+    PathBuf::from(r"S:\tools\codex\workdir\naVShorts")
+        .display()
+        .to_string()
+}
+
+fn default_work_dir_cleanup_limit_gb() -> f64 {
+    20.0
+}
+
 fn default_app_config_payload() -> AppConfigPayload {
     AppConfigPayload {
         target_face_folder: default_target_face_folder_value(),
+        work_dir: default_work_dir_value(),
+        work_dir_cleanup_limit_gb: default_work_dir_cleanup_limit_gb(),
         assist_json_dir: String::new(),
         preview_proxy_dir: String::new(),
         pre_reframe_default_engine: "yoloBytetrackArcface".to_string(),
@@ -445,6 +484,12 @@ fn load_app_config_internal() -> Result<(AppConfigPayload, PathBuf, String), Str
     if payload.target_face_folder.trim().is_empty() {
         payload.target_face_folder = default_target_face_folder_value();
     }
+    if payload.work_dir.trim().is_empty() {
+        payload.work_dir = default_work_dir_value();
+    }
+    if !payload.work_dir_cleanup_limit_gb.is_finite() || payload.work_dir_cleanup_limit_gb <= 0.0 {
+        payload.work_dir_cleanup_limit_gb = default_work_dir_cleanup_limit_gb();
+    }
     if payload.pre_reframe_default_engine.trim().is_empty() {
         payload.pre_reframe_default_engine = "yoloBytetrackArcface".to_string();
     }
@@ -461,6 +506,8 @@ fn load_app_config_internal() -> Result<(AppConfigPayload, PathBuf, String), Str
 fn app_config_response(payload: AppConfigPayload, path: PathBuf, scope: String) -> AppConfigResponse {
     AppConfigResponse {
         target_face_folder: payload.target_face_folder,
+        work_dir: payload.work_dir,
+        work_dir_cleanup_limit_gb: payload.work_dir_cleanup_limit_gb,
         assist_json_dir: payload.assist_json_dir,
         preview_proxy_dir: payload.preview_proxy_dir,
         pre_reframe_default_engine: payload.pre_reframe_default_engine,
@@ -475,6 +522,14 @@ fn save_app_config_internal(mut payload: AppConfigPayload) -> Result<AppConfigRe
     if payload.target_face_folder.trim().is_empty() {
         payload.target_face_folder = default_target_face_folder_value();
     }
+    if payload.work_dir.trim().is_empty() {
+        payload.work_dir = default_work_dir_value();
+    }
+    if !payload.work_dir_cleanup_limit_gb.is_finite() || payload.work_dir_cleanup_limit_gb <= 0.0 {
+        payload.work_dir_cleanup_limit_gb = default_work_dir_cleanup_limit_gb();
+    }
+    fs::create_dir_all(payload.work_dir.trim())
+        .map_err(|e| format!("failed to create work directory: {e}"))?;
     if payload.pre_reframe_default_engine.trim().is_empty() {
         payload.pre_reframe_default_engine = "yoloBytetrackArcface".to_string();
     }
@@ -514,6 +569,148 @@ fn save_app_config_internal(mut payload: AppConfigPayload) -> Result<AppConfigRe
                 write_to(&fallback)?;
                 Ok(app_config_response(payload, fallback.clone(), config_scope_for_path(&fallback).to_string()))
             }
+        }
+    }
+}
+
+fn configured_preview_root() -> PathBuf {
+    load_app_config_internal()
+        .ok()
+        .map(|(cfg, _, _)| {
+            if cfg.preview_proxy_dir.trim().is_empty() {
+                PathBuf::from(cfg.work_dir)
+            } else {
+                PathBuf::from(cfg.preview_proxy_dir)
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from(default_work_dir_value()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkDirCleanupResult {
+    pub work_dir: String,
+    pub limit_bytes: u64,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    pub deleted_files: usize,
+    pub deleted_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct WorkDirFile {
+    path: PathBuf,
+    size: u64,
+    modified: SystemTime,
+}
+
+fn collect_work_dir_files(root: &Path, files: &mut Vec<WorkDirFile>) -> Result<(), String> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root).map_err(|e| format!("failed to read work directory: {e}"))? {
+        let entry = entry.map_err(|e| format!("failed to read work directory entry: {e}"))?;
+        let path = entry.path();
+        let meta = entry
+            .metadata()
+            .map_err(|e| format!("failed to stat work directory entry: {e}"))?;
+        if meta.is_dir() {
+            collect_work_dir_files(&path, files)?;
+        } else if meta.is_file() {
+            files.push(WorkDirFile {
+                path,
+                size: meta.len(),
+                modified: meta.modified().unwrap_or(UNIX_EPOCH),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_work_dir_internal() -> Result<WorkDirCleanupResult, String> {
+    let (cfg, _, _) = load_app_config_internal()?;
+    let work_dir = PathBuf::from(cfg.work_dir.trim());
+    if work_dir.as_os_str().is_empty() {
+        return Err("work directory is empty".to_string());
+    }
+    fs::create_dir_all(&work_dir).map_err(|e| format!("failed to create work directory: {e}"))?;
+
+    let limit_gb = if cfg.work_dir_cleanup_limit_gb.is_finite() && cfg.work_dir_cleanup_limit_gb > 0.0 {
+        cfg.work_dir_cleanup_limit_gb
+    } else {
+        default_work_dir_cleanup_limit_gb()
+    };
+    let limit_bytes = (limit_gb * 1024.0 * 1024.0 * 1024.0).round() as u64;
+    let mut files = Vec::new();
+    collect_work_dir_files(&work_dir, &mut files)?;
+    let before_bytes = files.iter().map(|file| file.size).sum::<u64>();
+    let mut after_bytes = before_bytes;
+    let mut deleted_files = 0usize;
+    let mut deleted_bytes = 0u64;
+
+    if after_bytes > limit_bytes {
+        files.sort_by_key(|file| file.modified);
+        for file in files {
+            if after_bytes <= limit_bytes {
+                break;
+            }
+            match fs::remove_file(&file.path) {
+                Ok(()) => {
+                    after_bytes = after_bytes.saturating_sub(file.size);
+                    deleted_files += 1;
+                    deleted_bytes = deleted_bytes.saturating_add(file.size);
+                }
+                Err(_) => {
+                    // Best effort cleanup: skip files currently locked by playback/rendering.
+                }
+            }
+        }
+    }
+
+    Ok(WorkDirCleanupResult {
+        work_dir: work_dir.display().to_string(),
+        limit_bytes,
+        before_bytes,
+        after_bytes,
+        deleted_files,
+        deleted_bytes,
+    })
+}
+
+#[tauri::command]
+fn cleanup_work_dir() -> Result<WorkDirCleanupResult, String> {
+    cleanup_work_dir_internal()
+}
+
+#[tauri::command]
+fn move_file_to_path(source_path: String, target_path: String) -> Result<String, String> {
+    let source = PathBuf::from(source_path.trim());
+    let target = PathBuf::from(target_path.trim());
+    if source.as_os_str().is_empty() {
+        return Err("source path is empty".to_string());
+    }
+    if target.as_os_str().is_empty() {
+        return Err("target path is empty".to_string());
+    }
+    if !source.exists() {
+        return Err(format!("source file does not exist: {}", source.display()));
+    }
+    if target.exists() {
+        return Err(format!("target file already exists: {}", target.display()));
+    }
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("failed to create target directory: {e}"))?;
+        }
+    }
+
+    match fs::rename(&source, &target) {
+        Ok(()) => Ok(target.display().to_string()),
+        Err(_) => {
+            fs::copy(&source, &target).map_err(|e| format!("failed to copy rendered file to target: {e}"))?;
+            fs::remove_file(&source).map_err(|e| format!("failed to remove temporary rendered file: {e}"))?;
+            Ok(target.display().to_string())
         }
     }
 }
@@ -627,8 +824,16 @@ fn pick_json_file_with_default(start_dir: Option<String>) -> Result<Option<Strin
             let trimmed = s.trim().to_string();
             if trimmed.is_empty() { None } else { Some(trimmed) }
         })
-        .or_else(|| load_app_config_internal().ok().map(|(cfg, _, _)| cfg.assist_json_dir))
-        .unwrap_or_default();
+        .or_else(|| {
+            load_app_config_internal().ok().map(|(cfg, _, _)| {
+                if cfg.assist_json_dir.trim().is_empty() {
+                    cfg.work_dir
+                } else {
+                    cfg.assist_json_dir
+                }
+            })
+        })
+        .unwrap_or_else(default_work_dir_value);
     if !configured.trim().is_empty() {
         let dir = PathBuf::from(configured.trim());
         if dir.exists() {
@@ -730,16 +935,8 @@ fn create_preview_video(path: String) -> Result<String, String> {
         return Err(format!("Input file does not exist: {}", path));
     }
     let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
-    let preview_dir = load_app_config_internal()
-        .ok()
-        .map(|(cfg, _, _)| cfg.preview_proxy_dir)
-        .unwrap_or_default();
-    let preview_root = if preview_dir.trim().is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(preview_dir.trim()))
-    };
-    let preview = create_preview_proxy(&ffmpeg, &input, preview_root.as_deref()).map_err(|e| format!("{e:#}"))?;
+    let preview_root = configured_preview_root();
+    let preview = create_preview_proxy(&ffmpeg, &input, Some(preview_root.as_path())).map_err(|e| format!("{e:#}"))?;
     Ok(preview.display().to_string())
 }
 
@@ -750,16 +947,8 @@ fn create_preview_video_with_audio(path: String) -> Result<String, String> {
         return Err(format!("Input file does not exist: {}", path));
     }
     let ffmpeg = ffmpeg_binary().map_err(|e| format!("{e:#}"))?;
-    let preview_dir = load_app_config_internal()
-        .ok()
-        .map(|(cfg, _, _)| cfg.preview_proxy_dir)
-        .unwrap_or_default();
-    let preview_root = if preview_dir.trim().is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(preview_dir.trim()))
-    };
-    let preview = create_preview_proxy_with_audio(&ffmpeg, &input, preview_root.as_deref(), true)
+    let preview_root = configured_preview_root();
+    let preview = create_preview_proxy_with_audio(&ffmpeg, &input, Some(preview_root.as_path()), true)
         .map_err(|e| format!("{e:#}"))?;
     Ok(preview.display().to_string())
 }
@@ -2268,6 +2457,8 @@ pub fn run() {
             pick_json_file_with_default,
             get_app_config,
             save_app_config,
+            cleanup_work_dir,
+            move_file_to_path,
             backup_ui_state_snapshot,
             open_video,
             create_preview_video,
